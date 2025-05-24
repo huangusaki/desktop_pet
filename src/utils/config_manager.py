@@ -4,15 +4,39 @@ import os
 
 class ConfigManager:
     def __init__(self, config_file="config/settings.ini"):
-        self.config = configparser.ConfigParser()
+        self.config = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         project_root_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
+        if (
+            project_root_dir.endswith(os.path.join("src", "utils"))
+            or project_root_dir.endswith(os.path.join("src", "memory_system"))
+            or project_root_dir.endswith("src")
+        ):
+            project_root_dir = os.path.dirname(project_root_dir)
+            if os.path.basename(project_root_dir) == "src":
+                project_root_dir = os.path.dirname(project_root_dir)
         actual_config_path = os.path.join(project_root_dir, config_file)
         if not os.path.exists(actual_config_path):
-            raise FileNotFoundError(f"配置文件 {actual_config_path} 未找到。")
+            current_script_dir = os.path.dirname(os.path.abspath(__file__))
+            alt_project_root_dir = current_script_dir
+            for _ in range(3):
+                if os.path.isdir(
+                    os.path.join(alt_project_root_dir, "src")
+                ) and os.path.isdir(os.path.join(alt_project_root_dir, "config")):
+                    break
+                alt_project_root_dir = os.path.dirname(alt_project_root_dir)
+            actual_config_path_alt = os.path.join(alt_project_root_dir, config_file)
+            if os.path.exists(actual_config_path_alt):
+                actual_config_path = actual_config_path_alt
+                project_root_dir = alt_project_root_dir
+            else:
+                raise FileNotFoundError(
+                    f"配置文件 {actual_config_path} (或备用路径 {actual_config_path_alt}) 未找到。请确保路径正确，或脚本从项目根目录运行。"
+                )
         self.config.read(actual_config_path, encoding="utf-8")
         print(f"ConfigManager: 成功加载配置文件 {actual_config_path}")
+        self.project_root = project_root_dir
 
     def get_gemini_api_key(self):
         return self.config.get("GEMINI", "API_KEY", fallback=None)
@@ -67,40 +91,291 @@ class ConfigManager:
         return self.config.get("MONGODB", "COLLECTION_NAME", fallback="chat_history")
 
     def get_history_count_for_prompt(self):
-        try:
-            return self.config.getint("MONGODB", "HISTORY_COUNT_FOR_PROMPT", fallback=5)
-        except ValueError:
-            print("警告: MONGODB HISTORY_COUNT_FOR_PROMPT 值无效，将使用默认值 5。")
-            return 5
+        return self.config.getint("MONGODB", "HISTORY_COUNT_FOR_PROMPT", fallback=5)
 
     def get_screen_analysis_enabled(self) -> bool:
         return self.config.getboolean("SCREEN_ANALYSIS", "ENABLED", fallback=False)
 
     def get_screen_analysis_interval_seconds(self) -> int:
-        try:
-            val = self.config.getint("SCREEN_ANALYSIS", "INTERVAL_SECONDS", fallback=60)
-            return max(5, val)
-        except ValueError:
-            print("警告: SCREEN_ANALYSIS INTERVAL_SECONDS 值无效，将使用默认值 60。")
-            return 60
+        return self.config.getint("SCREEN_ANALYSIS", "INTERVAL_SECONDS", fallback=60)
 
     def get_screen_analysis_chance(self) -> float:
-        try:
-            val = self.config.getfloat("SCREEN_ANALYSIS", "CHANCE", fallback=0.1)
-            return max(0.0, min(1.0, val))
-        except ValueError:
-            print("警告: SCREEN_ANALYSIS CHANCE 值无效，将使用默认值 0.1。")
-            return 0.1
+        return self.config.getfloat("SCREEN_ANALYSIS", "CHANCE", fallback=0.1)
 
     def get_screen_analysis_prompt(self) -> str:
         default_prompt = (
             "你是{pet_name}，一个可爱的桌面宠物。这张图片是用户当前的屏幕截图。\n"
-            "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想，就像你碰巧看到了什么有趣或值得一提的事情一样。\n"
-            "不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
-            "例如，如果屏幕是代码编辑器，你可以说：“哇，这些代码看起来好复杂呀！”或者“主人又在努力工作啦？”\n"
-            "如果屏幕是视频网站，你可以说：“这个视频看起来很有趣呢！”\n"
-            "你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。\n"
-            '例如：{{"text": "这些代码看起来好复杂呀！", "emotion": "curious"}}'
+            "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n"
+            "你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
         )
-        prompt = self.config.get("SCREEN_ANALYSIS", "PROMPT", fallback=default_prompt)
-        return prompt.strip()
+        return self.config.get(
+            "SCREEN_ANALYSIS", "PROMPT", fallback=default_prompt
+        ).strip()
+
+    def get_memory_build_distribution(self) -> tuple:
+        raw_str = self.config.get(
+            "MEMORY_SYSTEM", "BUILD_DISTRIBUTION", fallback="3.0,2.0,0.5,72.0,24.0,0.5"
+        )
+        try:
+            return tuple(map(float, raw_str.split(",")))
+        except ValueError:
+            return (3.0, 2.0, 0.5, 72.0, 24.0, 0.5)
+
+    def get_memory_build_sample_num(self) -> int:
+        return self.config.getint("MEMORY_SYSTEM", "BUILD_SAMPLE_NUM", fallback=5)
+
+    def get_memory_build_sample_length(self) -> int:
+        return self.config.getint("MEMORY_SYSTEM", "BUILD_SAMPLE_LENGTH", fallback=10)
+
+    def get_memory_compress_rate(self) -> float:
+        return self.config.getfloat("MEMORY_SYSTEM", "COMPRESS_RATE", fallback=0.08)
+
+    def get_memory_forget_time_hours(self) -> float:
+        return self.config.getfloat("MEMORY_SYSTEM", "FORGET_TIME_HOURS", fallback=48.0)
+
+    def get_memory_forget_percentage(self) -> float:
+        return self.config.getfloat(
+            "MEMORY_SYSTEM", "FORGET_PERCENTAGE", fallback=0.005
+        )
+
+    def get_memory_ban_words(self) -> list:
+        raw_str = self.config.get("MEMORY_SYSTEM", "BAN_WORDS", fallback="")
+        return [word.strip() for word in raw_str.split(",") if word.strip()]
+
+    def get_memory_consolidate_percentage(self) -> float:
+        return self.config.getfloat(
+            "MEMORY_SYSTEM", "CONSOLIDATE_PERCENTAGE", fallback=0.1
+        )
+
+    def get_memory_consolidation_similarity_threshold(self) -> float:
+        return self.config.getfloat(
+            "MEMORY_SYSTEM", "CONSOLIDATION_SIMILARITY_THRESHOLD", fallback=0.90
+        )
+
+    _PARAMS_SECTION = "MEMORY_SYSTEM_PARAMS"
+
+    def get_memory_max_memorized_time_per_msg(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "MAX_MEMORIZED_TIME_PER_MSG", fallback=3
+        )
+
+    def get_memory_topic_similarity_threshold_for_connection(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION,
+            "TOPIC_SIMILARITY_THRESHOLD_FOR_CONNECTION",
+            fallback=0.7,
+        )
+
+    def get_memory_max_similar_topics_to_connect(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "MAX_SIMILAR_TOPICS_TO_CONNECT", fallback=3
+        )
+
+    def get_memory_node_summary_forget_time_hours(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "NODE_SUMMARY_FORGET_TIME_HOURS", fallback=360.0
+        )
+
+    def get_memory_rpm_limit_delay_summary_sec(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "RPM_LIMIT_DELAY_SUMMARY_SEC", fallback=2.0
+        )
+
+    def get_memory_embedding_update_delay_sec(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "EMBEDDING_UPDATE_DELAY_SEC", fallback=0.1
+        )
+
+    def get_memory_embedding_update_batch_size(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "EMBEDDING_UPDATE_BATCH_SIZE", fallback=50
+        )
+
+    def get_memory_max_topics_per_snippet(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "MAX_TOPICS_PER_SNIPPET", fallback=8
+        )
+
+    def get_memory_retrieval_max_final_memories(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RETRIEVAL_MAX_FINAL_MEMORIES", fallback=5
+        )
+
+    def get_memory_retrieval_activation_depth(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RETRIEVAL_ACTIVATION_DEPTH", fallback=3
+        )
+
+    def get_memory_fast_retrieval_max_keywords(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "FAST_RETRIEVAL_MAX_KEYWORDS", fallback=5
+        )
+
+    def get_memory_retrieval_input_max_topics(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RETRIEVAL_INPUT_MAX_TOPICS", fallback=5
+        )
+
+    def get_memory_retrieval_input_compress_rate(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "RETRIEVAL_INPUT_COMPRESS_RATE", fallback=0.05
+        )
+
+    def get_memory_activation_decay_per_link(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "ACTIVATION_DECAY_PER_LINK", fallback=0.5
+        )
+
+    def get_memory_activation_link_decay_base(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "ACTIVATION_LINK_DECAY_BASE", fallback=0.5
+        )
+
+    def get_memory_activation_min_threshold_for_spread(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "ACTIVATION_MIN_THRESHOLD_FOR_SPREAD", fallback=0.1
+        )
+
+    def get_memory_retrieval_top_activated_nodes_to_scan(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RETRIEVAL_TOP_ACTIVATED_NODES_TO_SCAN", fallback=20
+        )
+
+    def get_memory_retrieval_min_summary_similarity(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "RETRIEVAL_MIN_SUMMARY_SIMILARITY", fallback=0.65
+        )
+
+    def get_memory_retrieval_max_candidates_for_llm_rerank(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RETRIEVAL_MAX_CANDIDATES_FOR_LLM_RERANK", fallback=15
+        )
+
+    def get_memory_rerank_target_selection_count(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "RERANK_TARGET_SELECTION_COUNT", fallback=5
+        )
+
+    def get_memory_keyword_retrieval_node_similarity_threshold(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION,
+            "KEYWORD_RETRIEVAL_NODE_SIMILARITY_THRESHOLD",
+            fallback=0.8,
+        )
+
+    def get_memory_llm_config(self, llm_type_key_base: str) -> dict:
+        nickname_key = f"{llm_type_key_base}_NICKNAME"
+        nickname = self.config.get("MEMORY_LLMS", nickname_key, fallback=None)
+        if not nickname:
+            return {}
+        section_name = f"MEMORY_LLM_{nickname}"
+        if self.config.has_section(section_name):
+            model_config = dict(self.config.items(section_name))
+            return model_config
+        else:
+            print(
+                f"警告: 记忆系统 LLM 昵称 '{nickname}' (来自 {nickname_key}) "
+                f"在配置文件中未找到对应的详细配置段 [{section_name}]。"
+            )
+            return {}
+
+    def get_project_root(self):
+        return self.project_root
+
+
+if __name__ == "__main__":
+    dummy_project_root = "dummy_config_manager_test_project"
+    dummy_config_dir = os.path.join(dummy_project_root, "config")
+    dummy_settings_file = os.path.join(dummy_config_dir, "settings.ini")
+    os.makedirs(dummy_config_dir, exist_ok=True)
+    dummy_src_utils_dir = os.path.join(dummy_project_root, "src", "utils")
+    os.makedirs(dummy_src_utils_dir, exist_ok=True)
+    original_file_path_for_test = os.path.join(dummy_src_utils_dir, "config_manager.py")
+    with open(original_file_path_for_test, "w") as f:
+        f.write("# dummy")
+    config_content_for_test = """
+[GEMINI]
+API_KEY = TEST_GEMINI_KEY
+[MEMORY_SYSTEM]
+BUILD_DISTRIBUTION = 1,1,0.5,10,5,0.5
+BUILD_SAMPLE_NUM = 2
+BUILD_SAMPLE_LENGTH = 5
+COMPRESS_RATE = 0.05
+FORGET_TIME_HOURS = 20
+FORGET_PERCENTAGE = 0.002
+BAN_WORDS = skip,this
+CONSOLIDATE_PERCENTAGE = 0.02
+CONSOLIDATION_SIMILARITY_THRESHOLD = 0.92
+[MEMORY_SYSTEM_PARAMS]
+MAX_MEMORIZED_TIME_PER_MSG = 2
+TOPIC_SIMILARITY_THRESHOLD_FOR_CONNECTION = 0.65
+MAX_SIMILAR_TOPICS_TO_CONNECT = 2
+NODE_SUMMARY_FORGET_TIME_HOURS = 100
+RPM_LIMIT_DELAY_SUMMARY_SEC = 3.0
+EMBEDDING_UPDATE_DELAY_SEC = 0.2
+EMBEDDING_UPDATE_BATCH_SIZE = 30
+MAX_TOPICS_PER_SNIPPET = 4
+RETRIEVAL_MAX_FINAL_MEMORIES = 2
+RETRIEVAL_ACTIVATION_DEPTH = 2
+FAST_RETRIEVAL_MAX_KEYWORDS = 2
+RETRIEVAL_INPUT_MAX_TOPICS = 2
+RETRIEVAL_INPUT_COMPRESS_RATE = 0.02
+ACTIVATION_DECAY_PER_LINK = 0.4
+ACTIVATION_LINK_DECAY_BASE = 0.6
+ACTIVATION_MIN_THRESHOLD_FOR_SPREAD = 0.05
+RETRIEVAL_TOP_ACTIVATED_NODES_TO_SCAN = 10
+RETRIEVAL_MIN_SUMMARY_SIMILARITY = 0.6
+RETRIEVAL_MAX_CANDIDATES_FOR_LLM_RERANK = 8
+RERANK_TARGET_SELECTION_COUNT = 2
+KEYWORD_RETRIEVAL_NODE_SIMILARITY_THRESHOLD = 0.75
+[MEMORY_LLMS]
+LLM_TOPIC_JUDGE_NICKNAME = model_A
+LLM_EMBEDDING_TOPIC_NICKNAME = embed_B
+[MEMORY_LLM_model_A]
+name = gemini-test-model-a
+key = ACTUAL_KEY_FOR_MODEL_A 
+# base_url_env_name = MODEL_A_BASE_URL_ENV_VAR
+[MEMORY_LLM_embed_B]
+name = embedding-test-model-b
+key = ACTUAL_KEY_FOR_EMBED_B
+# base_url = https://custom.embedding.api/
+"""
+    with open(dummy_settings_file, "w", encoding="utf-8") as f:
+        f.write(config_content_for_test)
+    _original_file = __file__
+    __file__ = original_file_path_for_test
+    try:
+        cfg = ConfigManager(config_file="config/settings.ini")
+        print(f"Project root used by ConfigManager: {cfg.get_project_root()}")
+        print(
+            f"Test get_memory_max_memorized_time_per_msg: {cfg.get_memory_max_memorized_time_per_msg()}"
+        )
+        print(
+            f"Test get_memory_retrieval_activation_depth: {cfg.get_memory_retrieval_activation_depth()}"
+        )
+        print(f"Test get_memory_ban_words: {cfg.get_memory_ban_words()}")
+        llm_a_config = cfg.get_memory_llm_config("LLM_TOPIC_JUDGE")
+        print(f"LLM Model A Config: {llm_a_config}")
+        assert llm_a_config.get("name") == "gemini-test-model-a"
+        llm_b_config = cfg.get_memory_llm_config("LLM_EMBEDDING_TOPIC")
+        print(f"LLM Embed B Config: {llm_b_config}")
+        assert llm_b_config.get("key") == "ACTUAL_KEY_FOR_EMBED_B"
+    except Exception as e:
+        print(f"Error during ConfigManager test: {e}")
+        import traceback
+
+        traceback.print_exc()
+    finally:
+        __file__ = _original_file
+        if os.path.exists(original_file_path_for_test):
+            os.remove(original_file_path_for_test)
+        if os.path.exists(dummy_src_utils_dir):
+            os.rmdir(dummy_src_utils_dir)
+        if os.path.exists(dummy_settings_file):
+            os.remove(dummy_settings_file)
+        if os.path.exists(dummy_config_dir):
+            os.rmdir(dummy_config_dir)
+        if os.path.exists(os.path.join(dummy_project_root, "src")):
+            os.rmdir(os.path.join(dummy_project_root, "src"))
+        if os.path.exists(dummy_project_root):
+            os.rmdir(dummy_project_root)

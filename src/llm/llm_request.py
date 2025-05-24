@@ -1,0 +1,1150 @@
+import asyncio
+import json
+import re
+from datetime import datetime
+from typing import Tuple, Union, List, Dict, Any, Optional
+import base64
+from PIL import Image
+import io
+import aiohttp
+import os
+from google import genai
+from google.genai import types as google_genai_types
+from pymongo.database import Database
+import logging
+import random
+
+logger = logging.getLogger("llm_request")
+if not logger.hasHandlers():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+
+def compress_base64_image_by_scale(
+    base64_data: str, target_size: int = 0.8 * 1024 * 1024
+) -> str:
+    """压缩base64格式的图片到指定大小"""
+    try:
+        image_data = base64.b64decode(base64_data)
+        if len(image_data) <= target_size:
+            return base64_data
+        img = Image.open(io.BytesIO(image_data))
+        original_width, original_height = img.size
+        current_quality = 85
+        current_scale = 1.0
+        if len(image_data) > target_size:
+            scale_factor = (target_size / len(image_data)) ** 0.5
+            current_scale = min(0.9, scale_factor) if scale_factor < 1.0 else 0.9
+        for attempt in range(5):
+            new_width = int(original_width * current_scale)
+            new_height = int(original_height * current_scale)
+            if new_width <= 0 or new_height <= 0:
+                logger.warning(
+                    f"压缩图片：计算出的新尺寸无效 ({new_width}x{new_height})，源尺寸 {original_width}x{original_height}, 缩放比例 {current_scale:.2f}。将使用原始图片。"
+                )
+                return base64_data
+            output_buffer = io.BytesIO()
+            img_format_to_save = img.format if img.format in ["PNG", "WEBP"] else "JPEG"
+            temp_img = img.copy()
+            if (
+                getattr(temp_img, "is_animated", False)
+                and temp_img.n_frames > 1
+                and img.format == "GIF"
+            ):
+                frames = []
+                durations = []
+                loop = temp_img.info.get("loop", 0)
+                try:
+                    temp_img.seek(0)
+                    while True:
+                        current_duration = temp_img.info.get("duration", 100)
+                        durations.append(current_duration)
+                        frame_copy = temp_img.convert("RGBA")
+                        resized_frame = frame_copy.resize(
+                            (new_width, new_height), Image.Resampling.LANCZOS
+                        )
+                        frames.append(resized_frame)
+                        temp_img.seek(temp_img.tell() + 1)
+                except EOFError:
+                    pass
+                if frames:
+                    frames[0].save(
+                        output_buffer,
+                        format="GIF",
+                        save_all=True,
+                        append_images=frames[1:],
+                        optimize=True,
+                        duration=durations,
+                        loop=loop,
+                        disposal=2,
+                    )
+                    img_format_to_save = "GIF"
+                else:
+                    img_format_to_save = "JPEG"
+            if img_format_to_save != "GIF":
+                resized_img = temp_img.resize(
+                    (new_width, new_height), Image.Resampling.LANCZOS
+                )
+                if img_format_to_save == "PNG":
+                    resized_img.save(output_buffer, format="PNG", optimize=True)
+                elif img_format_to_save == "WEBP":
+                    resized_img.save(
+                        output_buffer,
+                        format="WEBP",
+                        quality=current_quality,
+                        lossless=False,
+                    )
+                else:
+                    img_format_to_save = "JPEG"
+                    if resized_img.mode in ("RGBA", "LA", "P"):
+                        resized_img = resized_img.convert("RGB")
+                    resized_img.save(
+                        output_buffer,
+                        format="JPEG",
+                        quality=current_quality,
+                        optimize=True,
+                    )
+            compressed_data = output_buffer.getvalue()
+            if len(compressed_data) <= target_size:
+                logger.info(
+                    f"压缩图片 (尝试 {attempt+1}): {original_width}x{original_height} ({img.format or 'N/A'}) -> {new_width}x{new_height} ({img_format_to_save}). "
+                    f"大小: {len(image_data) / 1024:.1f}KB -> {len(compressed_data) / 1024:.1f}KB (目标: {target_size / 1024:.1f}KB)"
+                )
+                return base64.b64encode(compressed_data).decode("utf-8")
+            if img_format_to_save in ["JPEG", "WEBP"] and current_quality > 50:
+                current_quality -= 10
+            else:
+                current_scale *= 0.80
+            logger.info(
+                f"压缩后仍然过大 (尝试 {attempt+1}): {len(compressed_data)/1024:.1f}KB. 下次尝试 scale={current_scale:.2f}, quality={current_quality}"
+            )
+        logger.warning(
+            f"多次压缩后大小 {len(compressed_data) / 1024:.1f}KB 仍大于目标 {target_size / 1024:.1f}KB. 返回当前最佳压缩结果。"
+        )
+        return base64.b64encode(compressed_data).decode("utf-8")
+    except Exception as e:
+        logger.error(f"压缩图片失败: {str(e)}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        return base64_data
+
+
+class GeminiSDKResponse:
+    def __init__(
+        self,
+        content: str,
+        reasoning: Optional[str] = None,
+        web_search_queries: Optional[List[str]] = None,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        raw_response: Optional[Any] = None,
+    ):
+        self.content = content
+        self.reasoning = reasoning if reasoning is not None else ""
+        self.web_search_queries = (
+            web_search_queries if web_search_queries is not None else []
+        )
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens
+        self.raw_response = raw_response
+
+    def to_dict(self):
+        return {
+            "content": self.content,
+            "reasoning": self.reasoning,
+            "web_search_queries": self.web_search_queries,
+            "usage": {
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
+            },
+        }
+
+
+class LLM_request:
+    def __init__(
+        self,
+        model_config: Dict[str, Any],
+        db_instance: Database,
+        global_llm_params: Optional[Dict[str, Any]] = None,
+        request_type: str = "default",
+    ):
+        self.model_config = model_config
+        self.model_name = model_config.get("name")
+        if not self.model_name:
+            raise ValueError("模型配置中必须包含 'name' 字段。")
+        self.db = db_instance
+        self.request_type = request_type
+        self.params = global_llm_params.copy() if global_llm_params else {}
+        model_specific_params = {
+            k: v
+            for k, v in model_config.items()
+            if k not in ["name", "key", "base_url", "api_keys", "pri_in", "pri_out"]
+        }
+        self.params.update(model_specific_params)
+        self.api_keys_actual: List[str] = []
+        api_key_config = model_config.get("key")
+        if isinstance(api_key_config, str) and api_key_config:
+            self.api_keys_actual.append(api_key_config)
+        elif isinstance(api_key_config, list) and all(
+            isinstance(k, str) for k in api_key_config
+        ):
+            self.api_keys_actual.extend(k for k in api_key_config if k)
+        if not self.api_keys_actual:
+            key_env_var_name = model_config.get("key_env_var_name")
+            if key_env_var_name:
+                env_key = os.getenv(key_env_var_name)
+                if env_key:
+                    self.api_keys_actual.append(env_key)
+            if not self.api_keys_actual:
+                raise ValueError(
+                    f"模型 '{self.model_name}' 未能加载任何有效的 API Key。请检查配置中的 'key' 字段或对应的环境变量。"
+                )
+        self.base_url_actual: Optional[str] = model_config.get("base_url")
+        self.current_key_index = 0
+        self._clients: List[genai.Client] = []
+        self._async_clients: List[genai.Client] = []
+        self.is_google_genai_model = (
+            not self.base_url_actual or "googleapis.com" in self.base_url_actual
+        )
+        if self.is_google_genai_model:
+            for key_val in self.api_keys_actual:
+                try:
+                    client_instance = genai.Client(api_key=key_val)
+                    async_client_instance = genai.Client(api_key=key_val)
+                    self._clients.append(client_instance)
+                    self._async_clients.append(async_client_instance)
+                except Exception as e:
+                    logger.error(
+                        f"为模型 {self.model_name} 使用 API Key ...{key_val[-4:]} 初始化 Google GenAI Client 失败: {e}"
+                    )
+            if not self._clients:
+                raise ConnectionError(
+                    f"模型 {self.model_name}: 所有提供的 API Key 都无法成功初始化 Google GenAI Client。"
+                )
+            logger.info(
+                f"模型 ({self.model_name}) Google GenAI SDK: 已为 {len(self._clients)} 个API Key 初始化客户端。"
+            )
+        else:
+            if not self.base_url_actual:
+                raise ValueError(
+                    f"模型 '{self.model_name}' 配置为非Google模型，但未提供 'base_url'。"
+                )
+            logger.info(
+                f"模型 ({self.model_name}) 将通过 HTTP POST 请求非 Google API 端点: {self.base_url_actual}"
+            )
+            if not self.api_keys_actual:
+                raise ValueError(f"模型 '{self.model_name}' (HTTP) 未提供 API Key。")
+        self._init_database_indexes()
+
+    def _init_database_indexes(self):
+        try:
+            if self.db is not None and hasattr(self.db, "llm_usage"):
+                collection = getattr(self.db, "llm_usage")
+                if collection is not None and hasattr(collection, "create_index"):
+                    collection.create_index([("timestamp", 1)])
+                    collection.create_index([("model_name", 1)])
+                    collection.create_index([("user_id", 1)])
+                    collection.create_index([("request_type", 1)])
+                else:
+                    logger.warning(
+                        "Database object does not appear to be a valid PyMongo collection for 'llm_usage'. Skipping index creation."
+                    )
+            elif self.db is None:
+                logger.warning(
+                    "Database instance (self.db) is None. Skipping index creation."
+                )
+            else:
+                logger.warning(
+                    "Database object does not have 'llm_usage' attribute. Skipping index creation."
+                )
+        except Exception as e:
+            logger.error(f"创建数据库索引失败: {str(e)}")
+
+    def _record_usage(
+        self,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
+        total_tokens: Optional[int],
+        user_id: str = "system",
+        request_type: Optional[str] = None,
+        endpoint: str = "generateContent",
+        status: str = "success",
+        error_message: Optional[str] = None,
+    ):
+        if request_type is None:
+            request_type = self.request_type
+        cost = None
+        try:
+            if self.db is not None and hasattr(self.db, "llm_usage"):
+                collection = getattr(self.db, "llm_usage")
+                if collection is not None and hasattr(collection, "insert_one"):
+                    usage_data = {
+                        "model_name": self.model_name,
+                        "user_id": user_id,
+                        "request_type": request_type,
+                        "endpoint": endpoint,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
+                        "cost": cost,
+                        "status": status,
+                        "error_message": error_message if status == "failure" else None,
+                        "timestamp": datetime.now(),
+                        "api_key_hint": (
+                            f"...{self.api_keys_actual[self.current_key_index][-4:]}"
+                            if self.api_keys_actual
+                            and self.current_key_index < len(self.api_keys_actual)
+                            else "N/A"
+                        ),
+                    }
+                    collection.insert_one(usage_data)
+                    if status == "success":
+                        logger.debug(
+                            f"Token使用情况 - 模型: {self.model_name}, 用户: {user_id}, 类型: {request_type}, "
+                            f"提示: {prompt_tokens}, 完成: {completion_tokens}, 总计: {total_tokens}"
+                        )
+                    else:
+                        logger.error(
+                            f"API 调用失败记录 - 模型: {self.model_name}, 用户: {user_id}, 类型: {request_type}, 端点: {endpoint}, 错误: {error_message}"
+                        )
+                else:
+                    logger.warning(
+                        "Database 'llm_usage' object does not support 'insert_one'. Usage not recorded."
+                    )
+        except Exception as e:
+            logger.error(f"记录token使用情况失败: {str(e)}")
+
+    def _get_current_sync_client(self) -> genai.Client:
+        if not self._clients:
+            raise RuntimeError(
+                f"模型 ({self.model_name}) 没有可用的 Google GenAI 同步客户端。"
+            )
+        return self._clients[self.current_key_index]
+
+    def _get_current_async_client(self) -> genai.Client:
+        if not self._async_clients:
+            raise RuntimeError(
+                f"模型 ({self.model_name}) 没有可用的 Google GenAI 异步客户端。"
+            )
+        return self._async_clients[self.current_key_index]
+
+    def _get_current_api_key_for_http(self) -> str:
+        if not self.api_keys_actual:
+            raise RuntimeError(f"模型 ({self.model_name}) 没有可用的 API Keys。")
+        return self.api_keys_actual[self.current_key_index]
+
+    def _switch_key(self) -> bool:
+        if len(self.api_keys_actual) <= 1:
+            return False
+        current_key_before_switch = self.api_keys_actual[self.current_key_index]
+        self.current_key_index = (self.current_key_index + 1) % len(
+            self.api_keys_actual
+        )
+        new_key = self.api_keys_actual[self.current_key_index]
+        logger.warning(
+            f"模型 ({self.model_name}) 遇到可重试错误或速率限制，从 Key ...{current_key_before_switch[-4:]} "
+            f"切换到 Key #{self.current_key_index + 1}/{len(self.api_keys_actual)} (...{new_key[-4:]})。"
+        )
+        return True
+
+    def _build_google_sdk_config(
+        self, overrides: Optional[Dict[str, Any]] = None
+    ) -> Optional[google_genai_types.GenerationConfig]:
+        effective_params = self.params.copy()
+        if overrides:
+            effective_params.update(overrides)
+        config_args = {}
+        if "candidate_count" in effective_params:
+            config_args["candidate_count"] = int(effective_params["candidate_count"])
+        if (
+            "stop_sequences" in effective_params
+            and effective_params["stop_sequences"] is not None
+        ):
+            ss = effective_params["stop_sequences"]
+            config_args["stop_sequences"] = ss if isinstance(ss, list) else [str(ss)]
+        if "max_output_tokens" in effective_params:
+            config_args["max_output_tokens"] = int(
+                effective_params["max_output_tokens"]
+            )
+        elif "max_tokens" in effective_params:
+            config_args["max_output_tokens"] = int(effective_params["max_tokens"])
+        if "temperature" in effective_params:
+            config_args["temperature"] = float(effective_params["temperature"])
+        if "top_p" in effective_params:
+            config_args["top_p"] = float(effective_params["top_p"])
+        if "top_k" in effective_params:
+            config_args["top_k"] = int(effective_params["top_k"])
+        if not config_args:
+            return None
+        try:
+            return google_genai_types.GenerationConfig(**config_args)
+        except Exception as e:
+            logger.error(
+                f"创建 Google SDK GenerationConfig 失败: {e}. 参数: {config_args}"
+            )
+            raise
+
+    @staticmethod
+    def _extract_reasoning_sdk(content: str) -> Tuple[str, str]:
+        if not isinstance(content, str):
+            return "", ""
+        match = re.search(
+            r"<(?:think|thought)>(.*?)</(?:think|thought)>",
+            content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if match:
+            reasoning = match.group(1).strip()
+            cleaned_content = content.replace(match.group(0), "", 1).strip()
+            return cleaned_content, reasoning
+        return content.strip(), ""
+
+    async def _execute_google_genai_sdk_request(
+        self,
+        contents: Union[str, List[Any]],
+        config_overrides_dict: Optional[Dict[str, Any]] = None,
+        is_embedding: bool = False,
+        user_id: str = "system",
+        request_type_override: Optional[str] = None,
+    ) -> Union[List[float], GeminiSDKResponse]:
+        request_type = (
+            request_type_override
+            if request_type_override
+            else ("embedding" if is_embedding else self.request_type)
+        )
+        last_exception = None
+        max_retries = self.params.get(
+            "max_retries", int(os.getenv("LLM_MAX_RETRIES", "3"))
+        )
+        for attempt in range(max_retries):
+            async_client = self._get_current_async_client()
+            try:
+                logger.debug(
+                    f"Attempt {attempt+1}/{max_retries} - Google SDK ({self.model_name}) using Key #{self.current_key_index + 1}"
+                )
+                if is_embedding:
+                    if not isinstance(contents, str):
+                        raise ValueError(
+                            "Embedding input for Google GenAI SDK must be a string for this wrapper."
+                        )
+                    task_type_str = (config_overrides_dict or {}).get(
+                        "task_type", "RETRIEVAL_DOCUMENT"
+                    )
+                    embedding_model_name = (config_overrides_dict or {}).get(
+                        "model", self.model_name
+                    )
+                    response_object = await async_client.embed_content(
+                        model=f"models/{embedding_model_name}",
+                        content=contents,
+                        task_type=task_type_str,
+                    )
+                    embedding_vector = (
+                        response_object.get("embedding")
+                        if isinstance(response_object, dict)
+                        else getattr(response_object, "embedding", None)
+                    )
+                    if embedding_vector:
+                        self._record_usage(
+                            None, None, None, user_id, request_type, "embedContent"
+                        )
+                        return embedding_vector
+                    else:
+                        raise ValueError(
+                            "Google GenAI Embedding response did not contain an embedding vector."
+                        )
+                else:
+                    generation_config_sdk = self._build_google_sdk_config(
+                        config_overrides_dict
+                    )
+                    request_params = {}
+                    if config_overrides_dict:
+                        if "system_instruction" in config_overrides_dict:
+                            request_params["system_instruction"] = (
+                                google_genai_types.Content(
+                                    role="system",
+                                    parts=[
+                                        google_genai_types.Part(
+                                            text=config_overrides_dict[
+                                                "system_instruction"
+                                            ]
+                                        )
+                                    ],
+                                )
+                            )
+                        if "tools" in config_overrides_dict:
+                            request_params["tools"] = config_overrides_dict["tools"]
+                        if "tool_config" in config_overrides_dict:
+                            request_params["tool_config"] = config_overrides_dict[
+                                "tool_config"
+                            ]
+                        if "safety_settings" in config_overrides_dict:
+                            request_params["safety_settings"] = config_overrides_dict[
+                                "safety_settings"
+                            ]
+                    generation_model_name = (config_overrides_dict or {}).get(
+                        "model", self.model_name
+                    )
+                    model_to_call = (
+                        generation_model_name
+                        if generation_model_name.startswith("models/")
+                        else f"models/{generation_model_name}"
+                    )
+                    model_obj = async_client.get_model(model_to_call)
+                    sdk_contents = []
+                    if isinstance(contents, str):
+                        sdk_contents.append(google_genai_types.Part(text=contents))
+                    elif isinstance(contents, list):
+                        for item in contents:
+                            if isinstance(item, str):
+                                sdk_contents.append(google_genai_types.Part(text=item))
+                            elif isinstance(item, Image.Image):
+                                img_byte_arr = io.BytesIO()
+                                format = (
+                                    item.format
+                                    if item.format
+                                    in ["PNG", "JPEG", "WEBP", "HEIC", "HEIF"]
+                                    else "PNG"
+                                )
+                                if format == "JPEG" and item.mode == "RGBA":
+                                    item = item.convert("RGB")
+                                item.save(img_byte_arr, format=format)
+                                sdk_contents.append(
+                                    google_genai_types.Part(
+                                        inline_data=google_genai_types.Blob(
+                                            mime_type=Image.MIME.get(
+                                                format, f"image/{format.lower()}"
+                                            ),
+                                            data=img_byte_arr.getvalue(),
+                                        )
+                                    )
+                                )
+                            elif isinstance(
+                                item, google_genai_types.Part
+                            ) or isinstance(item, google_genai_types.Content):
+                                sdk_contents.append(item)
+                            else:
+                                logger.warning(
+                                    f"Unsupported item type in contents list: {type(item)}"
+                                )
+                    else:
+                        sdk_contents = contents
+                    stream_mode = self.params.get("stream", False) or (
+                        config_overrides_dict or {}
+                    ).get("stream", False)
+                    response_obj_or_stream = await model_obj.generate_content(
+                        contents=sdk_contents,
+                        generation_config=generation_config_sdk,
+                        stream=stream_mode,
+                        **request_params,
+                    )
+                    text_content = ""
+                    usage_metadata = None
+                    raw_response_for_sdk_response = None
+                    if stream_mode:
+                        accumulated_content = []
+                        raw_chunks_list = []
+                        async for chunk in response_obj_or_stream:
+                            raw_chunks_list.append(chunk)
+                            if chunk.parts:
+                                for part in chunk.parts:
+                                    if hasattr(part, "text"):
+                                        accumulated_content.append(part.text)
+                            if (
+                                hasattr(chunk, "usage_metadata")
+                                and chunk.usage_metadata
+                            ):
+                                usage_metadata = chunk.usage_metadata
+                        text_content = "".join(accumulated_content)
+                        raw_response_for_sdk_response = raw_chunks_list
+                    else:
+                        response_obj = response_obj_or_stream
+                        raw_response_for_sdk_response = response_obj
+                        if response_obj.parts:
+                            text_content = "".join(
+                                part.text
+                                for part in response_obj.parts
+                                if hasattr(part, "text")
+                            )
+                        usage_metadata = getattr(response_obj, "usage_metadata", None)
+                    p_tokens, c_tokens, t_tokens = None, None, None
+                    if usage_metadata:
+                        p_tokens = getattr(usage_metadata, "prompt_token_count", None)
+                        cand_tokens_val = getattr(
+                            usage_metadata, "candidates_token_count", None
+                        )
+                        if isinstance(cand_tokens_val, list) and cand_tokens_val:
+                            c_tokens = sum(cand_tokens_val)
+                        elif isinstance(cand_tokens_val, int):
+                            c_tokens = cand_tokens_val
+                        t_tokens = getattr(usage_metadata, "total_token_count", None)
+                    self._record_usage(
+                        p_tokens,
+                        c_tokens,
+                        t_tokens,
+                        user_id,
+                        request_type,
+                        "generateContent",
+                    )
+                    content_cleaned, reasoning_text = self._extract_reasoning_sdk(
+                        text_content
+                    )
+                    web_searches = None
+                    candidate_for_grounding = None
+                    if not stream_mode and response_obj_or_stream.candidates:
+                        candidate_for_grounding = response_obj_or_stream.candidates[0]
+                    elif (
+                        stream_mode
+                        and raw_chunks_list
+                        and raw_chunks_list[-1].candidates
+                    ):
+                        candidate_for_grounding = raw_chunks_list[-1].candidates[0]
+                    if candidate_for_grounding:
+                        gm = getattr(
+                            candidate_for_grounding, "grounding_metadata", None
+                        )
+                        if (
+                            gm
+                            and hasattr(gm, "web_search_queries")
+                            and gm.web_search_queries
+                        ):
+                            web_searches = list(gm.web_search_queries)
+                            logger.info(f"提取到 Web 搜索查询 (SDK): {web_searches}")
+                    return GeminiSDKResponse(
+                        content=content_cleaned,
+                        reasoning=reasoning_text,
+                        web_search_queries=web_searches,
+                        prompt_tokens=p_tokens,
+                        completion_tokens=c_tokens,
+                        total_tokens=t_tokens,
+                        raw_response=raw_response_for_sdk_response,
+                    )
+            except Exception as e:
+                last_exception = e
+                error_str = str(e).lower()
+                import traceback
+
+                logger.warning(
+                    f"Google SDK ({self.model_name}) 失败 (尝试 {attempt+1}/{max_retries}): {type(e).__name__} - {e}\n{traceback.format_exc()}"
+                )
+                is_rate_limit = (
+                    "rate limit" in error_str
+                    or "429" in error_str
+                    or "resource_exhausted" in error_str
+                    or isinstance(e, google_genai_types.обычноResourceExhausted)
+                )
+                is_server_error = (
+                    "server error" in error_str
+                    or "500" in error_str
+                    or "unavailable" in error_str
+                    or "503" in error_str
+                    or isinstance(e, google_genai_types.InternalServerError)
+                    or isinstance(e, google_genai_types.ServiceUnavailableError)
+                )
+                is_auth_error = (
+                    "permission_denied" in error_str
+                    or "invalid api key" in error_str
+                    or "401" in error_str
+                    or "403" in error_str
+                    or "unauthenticated" in error_str
+                    or isinstance(e, google_genai_types.PermissionDenied)
+                )
+                is_invalid_arg = (
+                    "invalid argument" in error_str
+                    or "400" in error_str
+                    or "could not parse" in error_str
+                    or isinstance(e, google_genai_types.InvalidArgumentError)
+                )
+                if is_auth_error or is_invalid_arg:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        "embedContent" if is_embedding else "generateContent",
+                        "failure",
+                        str(e),
+                    )
+                    raise RuntimeError(f"Google SDK 请求失败，不可重试: {e}") from e
+                if attempt < max_retries - 1:
+                    if is_rate_limit or is_server_error:
+                        self._switch_key()
+                    base_wait = self.params.get("base_retry_wait_seconds", 5)
+                    wait_time = base_wait * (2**attempt) + random.uniform(0, 1)
+                    logger.info(f"等待 {wait_time:.2f} 秒后重试...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        "embedContent" if is_embedding else "generateContent",
+                        "failure",
+                        f"Max retries ({max_retries}) reached. Last error: {e}",
+                    )
+                    raise RuntimeError(
+                        f"Google SDK 请求在 {max_retries} 次尝试后失败。最后错误: {e}"
+                    ) from last_exception
+        self._record_usage(
+            None,
+            None,
+            None,
+            user_id,
+            request_type,
+            "embedContent" if is_embedding else "generateContent",
+            "failure",
+            "Max retries reached without throwing (logical error).",
+        )
+        raise RuntimeError(
+            f"Google SDK 请求在 {max_retries} 次尝试后失败 (代码逻辑问题)。"
+        )
+
+    async def _execute_http_post_request(
+        self,
+        endpoint_suffix: str,
+        payload: Dict[str, Any],
+        user_id: str = "system",
+        request_type_override: Optional[str] = None,
+    ) -> Any:
+        request_type = request_type_override or self.request_type
+        if not self.base_url_actual:
+            raise ValueError("非Google模型请求需要 base_url。")
+        api_url = f"{self.base_url_actual.rstrip('/')}/{endpoint_suffix.lstrip('/')}"
+        last_exception = None
+        max_retries = self.params.get(
+            "max_retries", int(os.getenv("LLM_MAX_RETRIES", "3"))
+        )
+        for attempt in range(max_retries):
+            current_api_key = self._get_current_api_key_for_http()
+            headers = {"Content-Type": "application/json"}
+            if (
+                current_api_key
+                and not current_api_key.startswith("dummy_")
+                and "no_key" not in current_api_key.lower()
+            ):
+                headers["Authorization"] = f"Bearer {current_api_key}"
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    logger.debug(
+                        f"Attempt {attempt+1}/{max_retries} - HTTP POST to {api_url} using Key ...{current_api_key[-4:] if current_api_key else 'N/A'}"
+                    )
+                    timeout_seconds = self.params.get("http_timeout_seconds", 30)
+                    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+                    async with session.post(
+                        api_url, json=payload, timeout=timeout
+                    ) as response:
+                        response_text_snippet = (await response.text())[:500]
+                        if response.status == 429 or response.status >= 500:
+                            if attempt < max_retries - 1:
+                                self._switch_key()
+                                base_wait = self.params.get(
+                                    "base_retry_wait_seconds", 5
+                                )
+                                wait_time = base_wait * (2**attempt) + random.uniform(
+                                    0, 1
+                                )
+                                logger.warning(
+                                    f"HTTP POST 失败 ({response.status}) to {api_url}. Response: {response_text_snippet}. "
+                                    f"切换Key/等待 {wait_time:.2f}s 重试..."
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                raise aiohttp.ClientResponseError(
+                                    response.request_info,
+                                    response.history,
+                                    status=response.status,
+                                    message=f"Max retries for rate limit/server error. Response: {response_text_snippet}",
+                                )
+                        response.raise_for_status()
+                        response_json = await response.json()
+                        return response_json
+            except aiohttp.ClientResponseError as e:
+                last_exception = e
+                logger.warning(
+                    f"HTTP POST 请求失败 (尝试 {attempt+1}/{max_retries}): {e.status} {e.message} for URL {api_url}"
+                )
+                if e.status == 401 or e.status == 403:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        endpoint_suffix,
+                        "failure",
+                        f"{e.status}: {e.message}",
+                    )
+                    if attempt == 0 and self._switch_key():
+                        logger.info(
+                            "Switched API key due to auth error, retrying once with new key..."
+                        )
+                        await asyncio.sleep(1)
+                        continue
+                    raise RuntimeError(
+                        f"HTTP POST 请求认证失败或禁止访问: {e.status} {e.message}"
+                    ) from e
+                if attempt < max_retries - 1:
+                    base_wait = self.params.get("base_retry_wait_seconds", 3)
+                    wait_time = base_wait * (2**attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(wait_time)
+                else:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        endpoint_suffix,
+                        "failure",
+                        f"Max retries - {e.status}: {e.message}",
+                    )
+                    raise RuntimeError(
+                        f"HTTP POST 请求在 {max_retries} 次尝试后失败。最后错误: {e.status} {e.message}"
+                    ) from last_exception
+            except asyncio.TimeoutError as e_timeout:
+                last_exception = e_timeout
+                logger.warning(
+                    f"HTTP POST 请求超时 (尝试 {attempt+1}/{max_retries}) for URL {api_url}"
+                )
+                if attempt < max_retries - 1:
+                    base_wait = self.params.get("base_retry_wait_seconds", 5)
+                    wait_time = base_wait * (2**attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(wait_time)
+                else:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        endpoint_suffix,
+                        "failure",
+                        "Max retries - Timeout",
+                    )
+                    raise RuntimeError(
+                        f"HTTP POST 请求在 {max_retries} 次尝试后因超时失败。"
+                    ) from last_exception
+            except Exception as e_generic:
+                last_exception = e_generic
+                logger.error(
+                    f"HTTP POST 请求中发生一般错误 (尝试 {attempt+1}/{max_retries}): {type(e_generic).__name__} - {e_generic} for URL {api_url}"
+                )
+                if attempt < max_retries - 1:
+                    base_wait = self.params.get("base_retry_wait_seconds", 3)
+                    wait_time = base_wait * (2**attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(wait_time)
+                else:
+                    self._record_usage(
+                        None,
+                        None,
+                        None,
+                        user_id,
+                        request_type,
+                        endpoint_suffix,
+                        "failure",
+                        f"Max retries - Generic: {type(e_generic).__name__} - {e_generic}",
+                    )
+                    raise RuntimeError(
+                        f"HTTP POST 请求在 {max_retries} 次尝试后因一般错误失败。最后错误: {e_generic}"
+                    ) from last_exception
+        self._record_usage(
+            None,
+            None,
+            None,
+            user_id,
+            request_type,
+            endpoint_suffix,
+            "failure",
+            "Max retries reached without throwing (HTTP POST logical error).",
+        )
+        raise RuntimeError(
+            f"HTTP POST 请求在 {max_retries} 次尝试后失败 (代码逻辑问题)。"
+        )
+
+    async def generate_response_async(
+        self,
+        prompt: Union[str, List[Any]],
+        user_id: str = "system",
+        request_type: Optional[str] = None,
+        **kwargs,
+    ) -> GeminiSDKResponse:
+        effective_request_type = request_type or self.request_type or "generate"
+        if self.is_google_genai_model:
+            sdk_response = await self._execute_google_genai_sdk_request(
+                contents=prompt,
+                config_overrides_dict=kwargs,
+                is_embedding=False,
+                user_id=user_id,
+                request_type_override=effective_request_type,
+            )
+            return sdk_response
+        else:
+            payload_messages = []
+            if isinstance(prompt, str):
+                payload_messages.append({"role": "user", "content": prompt})
+            elif isinstance(prompt, list):
+                for item in prompt:
+                    if isinstance(item, dict) and "role" in item and "content" in item:
+                        payload_messages.append(item)
+                    elif isinstance(item, str):
+                        payload_messages.append({"role": "user", "content": item})
+                    else:
+                        logger.warning(
+                            f"Unsupported item type in prompt list for HTTP model: {type(item)}"
+                        )
+            http_payload = {
+                "model": self.model_name,
+                "messages": payload_messages,
+                "temperature": kwargs.get(
+                    "temperature", self.params.get("temperature")
+                ),
+                "max_tokens": kwargs.get(
+                    "max_output_tokens",
+                    self.params.get("max_output_tokens", self.params.get("max_tokens")),
+                ),
+                "stream": kwargs.get("stream", self.params.get("stream", False)),
+            }
+            http_payload = {k: v for k, v in http_payload.items() if v is not None}
+            if "http_payload" in kwargs and isinstance(kwargs["http_payload"], dict):
+                http_payload = kwargs["http_payload"]
+            try:
+                raw_json_response = await self._execute_http_post_request(
+                    endpoint_suffix="chat/completions",
+                    payload=http_payload,
+                    user_id=user_id,
+                    request_type_override=effective_request_type,
+                )
+                text_content = ""
+                choices = raw_json_response.get("choices", [])
+                if choices and isinstance(choices, list) and choices[0]:
+                    message = choices[0].get("message", {})
+                    text_content = message.get("content", "")
+                usage = raw_json_response.get("usage", {})
+                p_tokens = usage.get("prompt_tokens")
+                c_tokens = usage.get("completion_tokens")
+                t_tokens = usage.get("total_tokens")
+                self._record_usage(
+                    p_tokens,
+                    c_tokens,
+                    t_tokens,
+                    user_id,
+                    effective_request_type,
+                    "chat/completions",
+                )
+                content_cleaned, reasoning_text = self._extract_reasoning_sdk(
+                    text_content
+                )
+                return GeminiSDKResponse(
+                    content=content_cleaned,
+                    reasoning=reasoning_text,
+                    prompt_tokens=p_tokens,
+                    completion_tokens=c_tokens,
+                    total_tokens=t_tokens,
+                    raw_response=raw_json_response,
+                )
+            except Exception as e:
+                logger.error(
+                    f"非Google模型 ({self.model_name}) generate_response_async 失败: {e}"
+                )
+                self._record_usage(
+                    None,
+                    None,
+                    None,
+                    user_id,
+                    effective_request_type,
+                    "chat/completions",
+                    "failure",
+                    str(e),
+                )
+                return GeminiSDKResponse(
+                    content=f"API调用失败: {e}",
+                    reasoning=str(e),
+                    raw_response={"error": str(e)},
+                )
+
+    async def get_embedding_async(
+        self,
+        text: str,
+        user_id: str = "system",
+        request_type: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[List[float]]:
+        if not text or not text.strip():
+            logger.warning(
+                "Embedding requested for empty or whitespace-only text. Returning None."
+            )
+            return None
+        effective_request_type = request_type or self.request_type or "embedding"
+        if self.is_google_genai_model:
+            embedding_vector = await self._execute_google_genai_sdk_request(
+                contents=text,
+                config_overrides_dict=kwargs,
+                is_embedding=True,
+                user_id=user_id,
+                request_type_override=effective_request_type,
+            )
+            return embedding_vector
+        else:
+            http_payload = {
+                "model": self.model_name,
+                "input": text,
+            }
+            if "encoding_format" in self.params:
+                http_payload["encoding_format"] = self.params["encoding_format"]
+            if "encoding_format" in kwargs:
+                http_payload["encoding_format"] = kwargs["encoding_format"]
+            if "http_payload" in kwargs and isinstance(kwargs["http_payload"], dict):
+                http_payload = kwargs["http_payload"]
+            try:
+                raw_json_response = await self._execute_http_post_request(
+                    endpoint_suffix="embeddings",
+                    payload=http_payload,
+                    user_id=user_id,
+                    request_type_override=effective_request_type,
+                )
+                embedding_vector = None
+                if isinstance(raw_json_response, dict):
+                    if (
+                        "data" in raw_json_response
+                        and isinstance(raw_json_response["data"], list)
+                        and raw_json_response["data"]
+                    ):
+                        first_item = raw_json_response["data"][0]
+                        if isinstance(first_item, dict) and "embedding" in first_item:
+                            embedding_vector = first_item["embedding"]
+                    elif "embedding" in raw_json_response:
+                        embedding_vector = raw_json_response["embedding"]
+                if not isinstance(embedding_vector, list):
+                    logger.error(
+                        f"未能从非Google模型 ({self.model_name}) 响应中提取有效的嵌入向量。响应: {str(raw_json_response)[:200]}"
+                    )
+                    embedding_vector = None
+                usage = (
+                    raw_json_response.get("usage", {})
+                    if isinstance(raw_json_response, dict)
+                    else {}
+                )
+                p_tokens = usage.get("prompt_tokens")
+                t_tokens = usage.get("total_tokens")
+                self._record_usage(
+                    p_tokens, 0, t_tokens, user_id, effective_request_type, "embeddings"
+                )
+                return embedding_vector
+            except Exception as e:
+                logger.error(
+                    f"非Google模型 ({self.model_name}) get_embedding_async 失败: {e}"
+                )
+                self._record_usage(
+                    None,
+                    None,
+                    None,
+                    user_id,
+                    effective_request_type,
+                    "embeddings",
+                    "failure",
+                    str(e),
+                )
+                return None
+
+
+async def main_test():
+    class DummyMongoHandler:
+        def __init__(self):
+            self.llm_usage = self
+
+        def insert_one(self, data):
+            print(
+                f"DB (mock): llm_usage.insert_one called with: Model={data['model_name']}, P={data.get('prompt_tokens')}, C={data.get('completion_tokens')}, Status={data['status']}"
+            )
+
+        def create_index(self, keys, **kwargs):
+            print(f"DB (mock): create_index called for llm_usage on {keys}")
+
+    mock_db_instance = DummyMongoHandler()
+    google_api_key = os.getenv("TEST_GOOGLE_API_KEY")
+    if google_api_key:
+        google_chat_model_config = {
+            "name": "gemini-1.5-flash-latest",
+            "key": google_api_key,
+            "temperature": 0.7,
+            "max_output_tokens": 50,
+        }
+        try:
+            print("\n--- Testing Google GenAI Chat Model ---")
+            google_llm = LLM_request(
+                google_chat_model_config,
+                mock_db_instance,
+                request_type="test_google_chat",
+            )
+            response_google = await google_llm.generate_response_async(
+                "Tell me a short joke.", user_id="test_user_google"
+            )
+            if response_google:
+                print(f"  Google Response: {response_google.content}")
+                print(f"  Reasoning: {response_google.reasoning}")
+                print(
+                    f"  Tokens: P={response_google.prompt_tokens}, C={response_google.completion_tokens}"
+                )
+        except Exception as e:
+            print(f"  Error during Google Chat LLM test: {e}")
+    else:
+        print(
+            "\n--- Skipping Google GenAI Chat Model Test (TEST_GOOGLE_API_KEY not set) ---"
+        )
+    siliconflow_bge_config = {
+        "name": "BAAI/bge-m3",
+        "key": os.getenv("SILICONFLOW_API_KEY", "dummy_sf_key"),
+        "base_url": os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/"),
+    }
+    if (
+        siliconflow_bge_config["key"] != "dummy_sf_key"
+        and "api.siliconflow.cn" in siliconflow_bge_config["base_url"]
+    ):
+        try:
+            print("\n--- Testing SiliconFlow bge-m3 Embedding Model ---")
+            sf_embedder = LLM_request(
+                siliconflow_bge_config,
+                mock_db_instance,
+                request_type="test_sf_embedding",
+            )
+            embedding_vector_sf = await sf_embedder.get_embedding_async(
+                "Hello from SiliconFlow test!", user_id="test_user_sf"
+            )
+            if embedding_vector_sf:
+                print(
+                    f"  SiliconFlow Embedding (first 5 dims): {embedding_vector_sf[:5]} Length: {len(embedding_vector_sf)}"
+                )
+            else:
+                print(
+                    "  Failed to get SiliconFlow embedding (or API call was mocked/failed)."
+                )
+        except Exception as e:
+            print(f"  Error during SiliconFlow Embedding test: {e}")
+    else:
+        print(
+            f"\n--- Skipping SiliconFlow Embedding Test (Key or URL is dummy/default or env vars not set) ---"
+        )
+        print(
+            f"    Key used: ...{siliconflow_bge_config['key'][-4:]}, URL: {siliconflow_bge_config['base_url']}"
+        )
+
+
+if __name__ == "__main__":
+    if not os.getenv("TEST_GOOGLE_API_KEY"):
+        print(
+            "NOTE: TEST_GOOGLE_API_KEY environment variable not set. Google API calls in main_test will likely fail authentication if run."
+        )
+    if not os.getenv("SILICONFLOW_API_KEY"):
+        print(
+            "NOTE: SILICONFLOW_API_KEY environment variable not set. SiliconFlow API calls in main_test will likely fail if run with the default URL."
+        )
+    asyncio.run(main_test())

@@ -1,39 +1,189 @@
 import sys
 import os
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+current_dir_for_path = os.path.dirname(os.path.abspath(__file__))
+project_root_for_path = os.path.dirname(current_dir_for_path)
+if project_root_for_path not in sys.path:
+    sys.path.insert(0, project_root_for_path)
+if current_dir_for_path not in sys.path:
+    sys.path.insert(0, current_dir_for_path)
+import asyncio
+import threading
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from src.utils.config_manager import ConfigManager
-from src.llm.gemini_client import GeminiClient
-from src.gui.main_window import PetWindow
-from src.gui.chat_dialog import ChatDialog
-from src.database.mongo_handler import MongoHandler
-from src.core.screen_analyzer import ScreenAnalyzer
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
+try:
+    from utils.config_manager import ConfigManager
+    from llm.gemini_client import GeminiClient
+    from gui.main_window import PetWindow
+    from gui.chat_dialog import ChatDialog
+    from database.mongo_handler import MongoHandler
+    from core.screen_analyzer import ScreenAnalyzer
+
+    print(
+        "DEBUG src/main.py: Successfully imported primary project modules using relative imports."
+    )
+except ImportError as e_primary_import:
+    print(
+        f"CRITICAL src/main.py: Failed to import primary project modules: {e_primary_import}"
+    )
+    if QApplication.instance() is None:
+        _app_temp = QApplication(sys.argv)
+        QMessageBox.critical(
+            None, "模块导入错误", f"无法导入核心模块: {e_primary_import}\n程序将退出。"
+        )
+    else:
+        QMessageBox.critical(
+            None, "模块导入错误", f"无法导入核心模块: {e_primary_import}\n程序将退出。"
+        )
+    sys.exit(1)
+try:
+    from llm.llm_request import LLM_request
+
+    print(
+        f"DEBUG src/main.py: LLM_request type after relative import: {type(LLM_request)}"
+    )
+except ImportError as e_llm_req_import:
+    print(
+        f"CRITICAL src/main.py: Failed to import LLM_request using relative import: {e_llm_req_import}"
+    )
+    LLM_request = None
+try:
+    from memory_system.memory_config import MemoryConfig
+    from memory_system.hippocampus_core import HippocampusManager
+
+    print(
+        "DEBUG src/main.py: Successfully imported MemoryConfig and HippocampusManager using relative imports."
+    )
+except ImportError as e_mem_import:
+    print(
+        f"CRITICAL src/main.py: Failed to import memory system modules using relative import: {e_mem_import}"
+    )
+    MemoryConfig = None
+    HippocampusManager = None
 try:
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
     Image, ImageDraw, ImageFont = None, None, None
-    print(
-        "CRITICAL: Pillow library not found. Image generation and screen analysis will fail. "
-        "Please install it using 'pip install Pillow'"
-    )
-from typing import List
+    print("CRITICAL: Pillow library not found...")
+from typing import List, Optional, Dict, Any
 
-config_manager_global = None
-gemini_client_global = None
-pet_window_global = None
-chat_dialog_global = None
-assets_path_global = None
-mongo_handler_global = None
-avatar_base_path_global = None
-pet_avatar_path_global = None
-user_avatar_path_global = None
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+config_manager_global: Optional[ConfigManager] = None
+gemini_client_global: Optional[GeminiClient] = None
+pet_window_global: Optional[PetWindow] = None
+chat_dialog_global: Optional[ChatDialog] = None
+mongo_handler_global: Optional[MongoHandler] = None
+hippocampus_manager_global: Optional[HippocampusManager] = None
+screen_analyzer_global: Optional[ScreenAnalyzer] = None
+assets_path_global: Optional[str] = None
+avatar_base_path_global: Optional[str] = None
+pet_avatar_path_global: Optional[str] = None
+user_avatar_path_global: Optional[str] = None
 available_emotions_global: List[str] = ["default"]
-screen_analyzer_global = None
+MEMORY_BUILD_INTERVAL = 60 * 60 * 1000
+MEMORY_FORGET_INTERVAL = 60 * 60 * 3 * 1000
+MEMORY_CONSOLIDATE_INTERVAL = 60 * 60 * 6 * 1000
+memory_build_timer: Optional[QTimer] = None
+memory_forget_timer: Optional[QTimer] = None
+memory_consolidate_timer: Optional[QTimer] = None
+
+
+class AsyncioHelper:
+    _loop: Optional[asyncio.AbstractEventLoop] = None
+    _thread: Optional[threading.Thread] = None
+    _is_running_event: Optional[threading.Event] = None
+
+    @staticmethod
+    def start_asyncio_loop():
+        if AsyncioHelper._loop is None or not AsyncioHelper._loop.is_running():
+            AsyncioHelper._is_running_event = threading.Event()
+            AsyncioHelper._loop = asyncio.new_event_loop()
+            AsyncioHelper._thread = threading.Thread(
+                target=AsyncioHelper._run_loop, daemon=True
+            )
+            AsyncioHelper._thread.start()
+            AsyncioHelper._is_running_event.wait(timeout=5)
+            if AsyncioHelper._loop.is_running():
+                print("DEBUG Main: Asyncio event loop started in a separate thread.")
+            else:
+                print("ERROR Main: Failed to start asyncio event loop in thread.")
+        else:
+            print("DEBUG Main: Asyncio event loop already running.")
+
+    @staticmethod
+    def _run_loop():
+        asyncio.set_event_loop(AsyncioHelper._loop)
+        if AsyncioHelper._is_running_event:
+            AsyncioHelper._is_running_event.set()
+        try:
+            AsyncioHelper._loop.run_forever()
+        except Exception as e:
+            print(f"ERROR Main: Asyncio loop in thread encountered an error: {e}")
+        finally:
+            if hasattr(AsyncioHelper._loop, "shutdown_asyncgens"):
+                AsyncioHelper._loop.run_until_complete(
+                    AsyncioHelper._loop.shutdown_asyncgens()
+                )
+            AsyncioHelper._loop.close()
+            print("DEBUG Main: Asyncio event loop in thread has finished and closed.")
+
+    @staticmethod
+    def stop_asyncio_loop():
+        if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+            print("DEBUG Main: Requesting asyncio event loop to stop.")
+            tasks = asyncio.all_tasks(loop=AsyncioHelper._loop)
+            if tasks:
+                for task in tasks:
+                    task.cancel()
+
+                async def cancel_all_and_stop():
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    AsyncioHelper._loop.stop()
+
+                AsyncioHelper._loop.call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(
+                        cancel_all_and_stop(), loop=AsyncioHelper._loop
+                    )
+                )
+            else:
+                AsyncioHelper._loop.call_soon_threadsafe(AsyncioHelper._loop.stop)
+        if AsyncioHelper._thread and AsyncioHelper._thread.is_alive():
+            print("DEBUG Main: Waiting for asyncio thread to join...")
+            AsyncioHelper._thread.join(timeout=5)
+            if AsyncioHelper._thread.is_alive():
+                print(
+                    "WARNING Main: Asyncio thread did not stop gracefully after 5 seconds."
+                )
+        AsyncioHelper._loop = None
+        AsyncioHelper._thread = None
+        AsyncioHelper._is_running_event = None
+        print("DEBUG Main: Asyncio loop cleanup complete.")
+
+    @staticmethod
+    def schedule_task(coro) -> Optional[asyncio.Future]:
+        if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, AsyncioHelper._loop)
+            return future
+        else:
+            print(
+                "ERROR Main: Asyncio loop not running or not initialized. Cannot schedule task."
+            )
+            if AsyncioHelper._loop is None:
+                print(
+                    "WARNING Main: Attempting to restart asyncio loop for task scheduling."
+                )
+                AsyncioHelper.start_asyncio_loop()
+                if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(coro, AsyncioHelper._loop)
+                    return future
+            print(
+                "ERROR Main: Failed to schedule task even after attempting loop restart."
+            )
+            return None
 
 
 def create_placeholder_avatar(
@@ -52,16 +202,28 @@ def create_placeholder_avatar(
         except IOError:
             font = ImageFont.load_default()
         if hasattr(draw, "textbbox"):
-            text_bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            x = (size[0] - text_width) / 2
+            y = (size[1] - text_height) / 2
+            text_anchor_y_adjustment = bbox[1]
+            y_draw = y - text_anchor_y_adjustment
         elif hasattr(draw, "textsize"):
             text_width, text_height = draw.textsize(text, font=font)
+            x = (size[0] - text_width) / 2
+            y = (size[1] - text_height) / 2
+            y_draw = y
         else:
-            text_width, text_height = font_size * len(text) / 1.5, font_size
-        x = (size[0] - text_width) / 2
-        y = (size[1] - text_height) / 2
-        draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
+            text_width, text_height = (
+                font.getsize(text)
+                if hasattr(font, "getsize")
+                else (len(text) * font_size / 1.5, font_size)
+            )
+            x = (size[0] - text_width) / 2
+            y = (size[1] - text_height) / 2
+            y_draw = y
+        draw.text((x, y_draw), text, fill=(255, 255, 255, 255), font=font)
         img.save(image_path)
         print(f"已创建占位头像图片: {image_path}")
     except Exception as e:
@@ -79,15 +241,11 @@ def scan_and_update_available_emotions(assets_path: str):
     found_emotions = set()
     for filename in os.listdir(assets_path):
         if filename.lower().endswith(".png"):
-            emotion_name = os.path.splitext(filename)[0].lower()
-            found_emotions.add(emotion_name)
+            found_emotions.add(os.path.splitext(filename)[0].lower())
     if not found_emotions:
-        print(
-            f"警告: 在 {assets_path} 中未找到任何 .png 文件作为情绪。将使用 'default'。"
-        )
         found_emotions.add("default")
     if "default" not in found_emotions:
-        print(f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加一个作为后备。")
+        print(f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加。")
         found_emotions.add("default")
     available_emotions_global = sorted(list(found_emotions))
     if not available_emotions_global:
@@ -95,7 +253,7 @@ def scan_and_update_available_emotions(assets_path: str):
     print(f"可用的情绪列表已更新: {available_emotions_global}")
 
 
-def setup_environment_and_config():
+def setup_environment_and_config() -> bool:
     global config_manager_global, assets_path_global, project_root
     global avatar_base_path_global, pet_avatar_path_global, user_avatar_path_global
     global available_emotions_global
@@ -110,47 +268,46 @@ def setup_environment_and_config():
         print(f"警告：配置文件 {actual_config_file_path} 不存在。将创建一个模板。")
         try:
             with open(actual_config_file_path, "w", encoding="utf-8") as cf:
-                cf.write("[GEMINI]\n")
-                cf.write("API_KEY = YOUR_API_KEY_HERE\n")
-                cf.write("MODEL_NAME = gemini-1.5-flash-latest\n")
-                cf.write("HTTP_PROXY =\n")
-                cf.write("HTTPS_PROXY =\n\n")
-                cf.write("[PET]\n")
-                cf.write("INITIAL_IMAGE_FILENAME = default.png\n")
-                cf.write("NAME = 小助手\n")
+                cf.write("; Default settings.ini content\n")
                 cf.write(
-                    "PERSONA = 你是一个友好、乐于助人的桌面宠物，名叫“小助手”。你会用亲切的语气和用户交流。\n\n"
+                    "[GEMINI]\nAPI_KEY = YOUR_API_KEY_HERE\nMODEL_NAME = gemini-1.5-flash-latest\nHTTP_PROXY =\nHTTPS_PROXY =\n\n"
                 )
-                cf.write("[USER]\n")
-                cf.write("NAME = 主人\n\n")
-                cf.write("[AVATARS]\n")
-                cf.write("AVATAR_BASE_PATH = src/assets/icon\n")
-                cf.write("PET_AVATAR_FILENAME = bot.png\n")
-                cf.write("USER_AVATAR_FILENAME = user.png\n\n")
-                cf.write("[MONGODB]\n")
-                cf.write("CONNECTION_STRING = mongodb://localhost:27017/\n")
-                cf.write("DATABASE_NAME = desktop_pet_db\n")
-                cf.write("COLLECTION_NAME = chat_history\n")
-                cf.write("HISTORY_COUNT_FOR_PROMPT = 5\n\n")
-                cf.write("[SCREEN_ANALYSIS]\n")
-                cf.write("# 是否启用屏幕截图分析功能 (True/False)\n")
-                cf.write("ENABLED = False\n")
-                cf.write("# 屏幕分析触发检查的间隔时间（秒）。\n")
-                cf.write("INTERVAL_SECONDS = 60\n")
-                cf.write("# 每次检查时，实际执行屏幕分析的概率 (0.0 到 1.0)。\n")
-                cf.write("CHANCE = 0.1\n")
-                cf.write("# 发送给 LLM 的提示模板。\n")
                 cf.write(
-                    "# {pet_name}, {user_name}, {available_emotions_str} 会被替换。\n"
+                    "[PET]\nINITIAL_IMAGE_FILENAME = default.png\nNAME = 小助手\nPERSONA = 你是一个友好、乐于助人的桌面宠物...\n\n"
                 )
-                default_screen_prompt = (
-                    "你是{pet_name}，一个可爱的桌面宠物。这张图片是你的主人 {user_name} 当前的屏幕截图。\\n"
-                    "请根据屏幕内容，用你的角色口吻，对 {user_name} 不经意地发表一句评论或感想。\\n"
-                    "重要：即使屏幕内容看起来和之前相似，也请你努力想出一些新的、不同的评论。\\n"
-                    "你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。\\n"
-                    '例如：{{\\"text\\": \\"{user_name} 看的这个视频很有趣呢！\\", \\"emotion\\": \\"happy\\"}}'
+                cf.write("[USER]\nNAME = 主人\n\n")
+                cf.write(
+                    "[AVATARS]\nAVATAR_BASE_PATH = src/assets/icon\nPET_AVATAR_FILENAME = bot.png\nUSER_AVATAR_FILENAME = user.png\n\n"
                 )
-                cf.write(f"PROMPT = {default_screen_prompt}\n\n")
+                cf.write(
+                    "[MONGODB]\nCONNECTION_STRING = mongodb://localhost:27017/\nDATABASE_NAME = desktop_pet_db\nCOLLECTION_NAME = chat_history\nHISTORY_COUNT_FOR_PROMPT = 5\n\n"
+                )
+                cf.write(
+                    "[SCREEN_ANALYSIS]\nENABLED = False\nINTERVAL_SECONDS = 60\nCHANCE = 0.1\nPROMPT = ...\n\n"
+                )
+                cf.write("; --- Memory System Configuration ---\n")
+                cf.write("[MEMORY_SYSTEM]\n")
+                cf.write("BUILD_DISTRIBUTION = 3.0,2.0,0.5,72.0,24.0,0.5\n")
+                cf.write(
+                    "BUILD_SAMPLE_NUM = 5\nBUILD_SAMPLE_LENGTH = 10\nCOMPRESS_RATE = 0.08\n"
+                )
+                cf.write("FORGET_TIME_HOURS = 48.0\nFORGET_PERCENTAGE = 0.005\n")
+                cf.write("BAN_WORDS = 我,你,它,的,了,呢,吧,啊,哦,嗯\n")
+                cf.write(
+                    "CONSOLIDATE_PERCENTAGE = 0.1\nCONSOLIDATION_SIMILARITY_THRESHOLD = 0.90\n\n"
+                )
+                cf.write("[MEMORY_SYSTEM_PARAMS]\n")
+                cf.write("MAX_MEMORIZED_TIME_PER_MSG = 3\n")
+                cf.write("KEYWORD_RETRIEVAL_NODE_SIMILARITY_THRESHOLD = 0.8\n\n")
+                cf.write("[MEMORY_LLMS]\n")
+                cf.write("LLM_TOPIC_JUDGE_NICKNAME = gemini_flash_mem\n")
+                cf.write("LLM_RE_RANK_NICKNAME = gemini_pro_mem\n\n")
+                cf.write("[MEMORY_LLM_gemini_flash_mem]\n")
+                cf.write(
+                    "name = gemini-1.5-flash-latest\nkey = YOUR_API_KEY_HERE ; Or actual key if not using env var for LLM_request\n\n"
+                )
+                cf.write("[MEMORY_LLM_embedding_google]\n")
+                cf.write("name = text-embedding-004\nkey = YOUR_API_KEY_HERE\n\n")
             QMessageBox.information(
                 None,
                 "配置文件创建成功",
@@ -182,7 +339,7 @@ def setup_environment_and_config():
             and "default" not in available_emotions_global
         ):
             available_emotions_global.append("default")
-            available_emotions_global = sorted(list(set(available_emotions_global)))
+            available_emotions_global.sort()
     avatar_base_path_relative = config_manager_global.get_avatar_base_path_relative()
     avatar_base_path_global = os.path.normpath(
         os.path.join(project_root, avatar_base_path_relative)
@@ -207,56 +364,149 @@ def setup_environment_and_config():
     return True
 
 
-def initialize_services():
-    global gemini_client_global, config_manager_global, mongo_handler_global, available_emotions_global
-    api_key = config_manager_global.get_gemini_api_key()
-    model_name = config_manager_global.get_gemini_model_name()
-    pet_name = config_manager_global.get_pet_name()
-    user_name = config_manager_global.get_user_name()
-    pet_persona = config_manager_global.get_pet_persona()
-    if not api_key or api_key == "YOUR_API_KEY_HERE":
-        QMessageBox.critical(
-            None, "API Key 错误", "请在 config/settings.ini 中配置 Gemini API Key。"
+async def initialize_async_services():
+    global config_manager_global, gemini_client_global, mongo_handler_global, hippocampus_manager_global
+    global available_emotions_global
+    if not config_manager_global:
+        print(
+            "CRITICAL: ConfigManager not initialized before initialize_async_services."
         )
         return False
+    mongo_ok = False
     try:
         conn_str = config_manager_global.get_mongo_connection_string()
         db_name = config_manager_global.get_mongo_database_name()
         coll_name = config_manager_global.get_mongo_collection_name()
+        print("DEBUG: Initializing MongoHandler...")
         mongo_handler_global = MongoHandler(conn_str, db_name, coll_name)
-        if not mongo_handler_global.is_connected():
-            QMessageBox.warning(
-                None, "MongoDB连接警告", "无法连接到MongoDB，聊天记录功能将不可用。"
-            )
-            mongo_handler_global = None
-        else:
+        if mongo_handler_global.is_connected() and (
+            mongo_handler_global.get_database() is not None
+        ):
             print("MongoDB Handler 初始化并连接成功。")
+            mongo_ok = True
+        else:
+            QMessageBox.warning(
+                None,
+                "MongoDB连接警告",
+                "无法连接到MongoDB或数据库不可用。聊天记录和记忆系统功能将受限。",
+            )
+            print(
+                "ERROR: MongoDB connection failed or DB not accessible after MongoHandler instantiation."
+            )
+            if not mongo_handler_global.is_connected():
+                mongo_handler_global = None
     except Exception as e:
         QMessageBox.warning(
             None,
-            "MongoDB初始化警告",
-            f"初始化 MongoDB 时发生错误: {e}。\n聊天记录功能将不可用。",
+            "MongoDB初始化严重错误",
+            f"初始化 MongoDB 时发生严重错误: {e}。\n程序将无法正常运行。",
         )
+        print(f"CRITICAL ERROR: MongoDB initialization exception: {e}")
+        import traceback
+
+        traceback.print_exc()
         mongo_handler_global = None
-    try:
-        gemini_client_global = GeminiClient(
-            api_key=api_key,
-            model_name=model_name,
-            pet_name=pet_name,
-            user_name=user_name,
-            pet_persona=pet_persona,
-            available_emotions=available_emotions_global,
+        mongo_ok = False
+    if not mongo_ok:
+        print(
+            "CRITICAL: MongoDB initialization failed. Aborting service initialization."
         )
-        print("Gemini客户端初始化成功。")
+        return False
+    gemini_ok = False
+    try:
+        chat_api_key = config_manager_global.get_gemini_api_key()
+        chat_model_name = config_manager_global.get_gemini_model_name()
+        pet_name = config_manager_global.get_pet_name()
+        user_name = config_manager_global.get_user_name()
+        pet_persona = config_manager_global.get_pet_persona()
+        if not chat_api_key or chat_api_key == "YOUR_API_KEY_HERE":
+            QMessageBox.critical(
+                None,
+                "API Key 错误",
+                "请在 config/settings.ini 中配置主聊天 Gemini API Key。",
+            )
+            print("CRITICAL ERROR: Gemini API Key missing or placeholder.")
+        else:
+            gemini_client_global = GeminiClient(
+                api_key=chat_api_key,
+                model_name=chat_model_name,
+                pet_name=pet_name,
+                user_name=user_name,
+                pet_persona=pet_persona,
+                available_emotions=available_emotions_global,
+            )
+            print("主聊天 Gemini客户端初始化成功。")
+            gemini_ok = True
     except Exception as e:
         QMessageBox.critical(None, "Gemini客户端初始化错误", f"错误: {e}")
+        print(f"CRITICAL ERROR: Gemini client initialization exception: {e}")
+        import traceback
+
+        traceback.print_exc()
+        gemini_client_global = None
+        gemini_ok = False
+    if not gemini_ok:
+        print(
+            "CRITICAL: Gemini client initialization failed. Aborting service initialization."
+        )
         return False
+    if HippocampusManager is None or MemoryConfig is None:
+        print(
+            "WARNING: HippocampusManager or MemoryConfig was not imported, skipping its initialization."
+        )
+    elif mongo_handler_global and (mongo_handler_global.get_database() is not None):
+        try:
+            print("DEBUG: Attempting MemoryConfig.from_config_manager...")
+            mem_config = MemoryConfig.from_config_manager(config_manager_global)
+            print(f"DEBUG: MemoryConfig loaded: {mem_config is not None}")
+            memory_global_llm_params: Optional[Dict[str, Any]] = None
+            pet_name_for_hippocampus = config_manager_global.get_pet_name()
+            print("DEBUG: Attempting HippocampusManager.get_instance()...")
+            hippocampus_manager_global = await HippocampusManager.get_instance()
+            print(
+                f"DEBUG: HippocampusManager instance obtained: {hippocampus_manager_global is not None}"
+            )
+            print(
+                "DEBUG: Attempting hippocampus_manager_global.initialize_singleton..."
+            )
+            await hippocampus_manager_global.initialize_singleton(
+                memory_config=mem_config,
+                database_instance=mongo_handler_global.get_database(),
+                chat_collection_name=config_manager_global.get_mongo_collection_name(),
+                pet_name=pet_name_for_hippocampus,
+                global_llm_params=memory_global_llm_params,
+            )
+            print("DEBUG: initialize_singleton completed.")
+            print("记忆系统 (HippocampusManager) 初始化成功。")
+        except Exception as e:
+            QMessageBox.warning(
+                None,
+                "记忆系统初始化警告",
+                f"初始化记忆系统时发生错误: {e}\n记忆功能可能不可用。",
+            )
+            print(
+                f"ERROR: Memory system (HippocampusManager) initialization failed: {e}",
+                file=sys.stderr,
+            )
+            import traceback
+
+            traceback.print_exc()
+            hippocampus_manager_global = None
+    else:
+        QMessageBox.warning(
+            None, "记忆系统跳过", "由于数据库连接失败或未初始化，记忆系统未初始化。"
+        )
+        print(
+            "INFO: Memory system skipped due to MongoDB issue or HippocampusManager/MemoryConfig not imported."
+        )
+        hippocampus_manager_global = None
+    print("DEBUG: Exiting initialize_async_services.")
     return True
 
 
 def open_chat_dialog_handler():
     global chat_dialog_global, gemini_client_global, pet_window_global, mongo_handler_global
-    global config_manager_global, pet_avatar_path_global, user_avatar_path_global
+    global config_manager_global, pet_avatar_path_global, user_avatar_path_global, hippocampus_manager_global
     if chat_dialog_global is None:
         if not gemini_client_global:
             QMessageBox.warning(None, "服务未就绪", "Gemini 服务尚未初始化。")
@@ -265,6 +515,7 @@ def open_chat_dialog_handler():
             gemini_client=gemini_client_global,
             mongo_handler=mongo_handler_global,
             config_manager=config_manager_global,
+            hippocampus_manager=hippocampus_manager_global,
             pet_avatar_path=pet_avatar_path_global,
             user_avatar_path=user_avatar_path_global,
             parent=pet_window_global,
@@ -301,21 +552,106 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         )
         db_text = f"（看了一眼屏幕）{text}"
         mongo_handler_global.insert_chat_message(
-            sender="pet",
+            sender="pet_screen_reaction",
             message_text=db_text,
             role_play_character=current_pet_character,
         )
         print(f"Main: Screen reaction ('{text}') saved to MongoDB.")
-    elif mongo_handler_global:
-        print("Main: MongoDB not connected. Screen reaction not saved.")
+
+
+async def run_memory_build():
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
+        print("定时任务：开始构建记忆...")
+        try:
+            await hippocampus_manager_global.build_memory()
+            print("定时任务：构建记忆完成。")
+        except Exception as e:
+            print(f"定时任务：构建记忆时发生错误: {e}")
     else:
-        print("Main: MongoDB not available. Screen reaction not saved.")
+        print("定时任务：跳过构建记忆，记忆系统未初始化或未导入。")
 
 
-def main():
-    global pet_window_global, config_manager_global, assets_path_global, mongo_handler_global
-    global available_emotions_global, gemini_client_global, screen_analyzer_global
+async def run_memory_forget():
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
+        print("定时任务：开始遗忘记忆...")
+        try:
+            await hippocampus_manager_global.forget_memory()
+            print("定时任务：遗忘记忆完成。")
+        except Exception as e:
+            print(f"定时任务：遗忘记忆时发生错误: {e}")
+    else:
+        print("定时任务：跳过遗忘记忆，记忆系统未初始化或未导入。")
+
+
+async def run_memory_consolidate():
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
+        print("定时任务：开始整合记忆...")
+        try:
+            await hippocampus_manager_global.consolidate_memory()
+            print("定时任务：整合记忆完成。")
+        except Exception as e:
+            print(f"定时任务：整合记忆时发生错误: {e}")
+    else:
+        print("定时任务：跳过整合记忆，记忆系统未初始化或未导入。")
+
+
+def schedule_memory_tasks(app: QApplication):
+    global memory_build_timer, memory_forget_timer, memory_consolidate_timer
+    if not hippocampus_manager_global or not hippocampus_manager_global._initialized:
+        print("记忆系统未初始化或未导入，不调度记忆维护任务。")
+        return
+
+    def trigger_build():
+        print("QTimer: Build memory triggered.")
+        future = AsyncioHelper.schedule_task(run_memory_build())
+        if future:
+            future.add_done_callback(
+                lambda f: print(
+                    f"Async build task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
+                )
+            )
+
+    def trigger_forget():
+        print("QTimer: Forget memory triggered.")
+        future = AsyncioHelper.schedule_task(run_memory_forget())
+        if future:
+            future.add_done_callback(
+                lambda f: print(
+                    f"Async forget task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
+                )
+            )
+
+    def trigger_consolidate():
+        print("QTimer: Consolidate memory triggered.")
+        future = AsyncioHelper.schedule_task(run_memory_consolidate())
+        if future:
+            future.add_done_callback(
+                lambda f: print(
+                    f"Async consolidate task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
+                )
+            )
+
+    memory_build_timer = QTimer(app)
+    memory_build_timer.timeout.connect(trigger_build)
+    memory_build_timer.start(MEMORY_BUILD_INTERVAL)
+    print(f"记忆构建任务已调度，每 {MEMORY_BUILD_INTERVAL // (60*1000)} 分钟运行一次。")
+    memory_forget_timer = QTimer(app)
+    memory_forget_timer.timeout.connect(trigger_forget)
+    memory_forget_timer.start(MEMORY_FORGET_INTERVAL)
+    print(
+        f"记忆遗忘任务已调度，每 {MEMORY_FORGET_INTERVAL // (60*1000)} 分钟运行一次。"
+    )
+    memory_consolidate_timer = QTimer(app)
+    memory_consolidate_timer.timeout.connect(trigger_consolidate)
+    memory_consolidate_timer.start(MEMORY_CONSOLIDATE_INTERVAL)
+    print(
+        f"记忆整合任务已调度，每 {MEMORY_CONSOLIDATE_INTERVAL // (60*1000)} 分钟运行一次。"
+    )
+
+
+if __name__ == "__main__":
     if Image is None:
+        _app_temp_pillow_check = QApplication(sys.argv)
         QMessageBox.critical(
             None,
             "依赖缺失",
@@ -323,10 +659,49 @@ def main():
         )
         sys.exit(1)
     app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
+    AsyncioHelper.start_asyncio_loop()
     if not setup_environment_and_config():
+        AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
-    if not initialize_services():
+    initialization_succeeded = False
+    if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+        print(
+            "DEBUG Main: Scheduling initialize_async_services directly in AsyncioHelper's loop."
+        )
+
+        async def do_initialization():
+            try:
+                return await initialize_async_services()
+            except Exception as e:
+                print(
+                    f"CRITICAL ERROR: Exception during initialize_async_services execution: {e}"
+                )
+                import traceback
+
+                traceback.print_exc()
+                return False
+
+        init_future_concurrent = AsyncioHelper.schedule_task(do_initialization())
+        if init_future_concurrent:
+            try:
+                initialization_succeeded = init_future_concurrent.result(timeout=30)
+                print(
+                    f"DEBUG Main: initialize_async_services completed. Result: {initialization_succeeded}"
+                )
+            except Exception as e:
+                print(
+                    f"CRITICAL ERROR: Waiting for initialize_async_services future failed: {e}"
+                )
+                initialization_succeeded = False
+        else:
+            print("ERROR Main: Failed to schedule initialize_async_services task.")
+            initialization_succeeded = False
+    else:
+        print("CRITICAL ERROR: AsyncioHelper loop not available for initialization.")
+        initialization_succeeded = False
+    if not initialization_succeeded:
+        QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
+        AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
     initial_image_filename = config_manager_global.get_pet_initial_image_filename()
     initial_pet_image_abs_path = os.path.join(
@@ -338,7 +713,12 @@ def main():
         available_emotions=available_emotions_global,
     )
     pet_window_global.request_open_chat_dialog.connect(open_chat_dialog_handler)
-    if gemini_client_global and config_manager_global and pet_window_global:
+    if (
+        gemini_client_global
+        and config_manager_global
+        and pet_window_global
+        and config_manager_global.get_screen_analysis_enabled()
+    ):
         user_name_for_analyzer = config_manager_global.get_user_name()
         screen_analyzer_global = ScreenAnalyzer(
             gemini_client=gemini_client_global,
@@ -353,22 +733,28 @@ def main():
             handle_screen_analysis_reaction
         )
         screen_analyzer_global.start_monitoring()
+        print("DEBUG Main: Screen analyzer configured and monitoring started.")
     else:
         print(
-            "ScreenAnalyzer 未初始化，依赖项 (Gemini, Config, PetWindow) 未完全就绪。"
+            "INFO Main: Screen analyzer not started (disabled or dependencies missing)."
         )
     pet_window_global.show()
     pet_window_global.set_speech_text("你好！我在这里哦！")
+    schedule_memory_tasks(app)
     exit_code = app.exec()
+    AsyncioHelper.stop_asyncio_loop()
     if screen_analyzer_global:
         screen_analyzer_global.stop_monitoring()
         print("ScreenAnalyzer监控已停止。")
     if mongo_handler_global:
         mongo_handler_global.close_connection()
-        print("MongoDB连接已关闭。")
-    print("应用程序退出。")
+        print("Main: MongoDB连接已请求关闭。")
+    if memory_build_timer and memory_build_timer.isActive():
+        memory_build_timer.stop()
+    if memory_forget_timer and memory_forget_timer.isActive():
+        memory_forget_timer.stop()
+    if memory_consolidate_timer and memory_consolidate_timer.isActive():
+        memory_consolidate_timer.stop()
+    print("记忆维护任务定时器已停止。")
+    print(f"应用程序退出，退出代码: {exit_code}")
     sys.exit(exit_code)
-
-
-if __name__ == "__main__":
-    main()
