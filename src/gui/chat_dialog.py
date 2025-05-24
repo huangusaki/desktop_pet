@@ -16,7 +16,7 @@ from PyQt6.QtGui import QTextCursor
 
 class ChatDialog(QDialog):
     dialog_closed = pyqtSignal()
-    emotion_received = pyqtSignal(str)
+    speech_and_emotion_received = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -225,7 +225,7 @@ class ChatDialog(QDialog):
                 message_text=pet_text,
                 role_play_character=self.current_role_play_character,
             )
-        self.emotion_received.emit(pet_emotion)
+        self.speech_and_emotion_received.emit(pet_text, pet_emotion)
 
     def _format_message_html(
         self,

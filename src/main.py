@@ -242,8 +242,7 @@ def open_chat_dialog_handler():
             parent=pet_window_global,
         )
         if pet_window_global:
-            chat_dialog_global.emotion_received.connect(pet_window_global.set_emotion)
-            print("已连接 ChatDialog.emotion_received 到 PetWindow.set_emotion")
+            chat_dialog_global.speech_and_emotion_received.connect(pet_window_global.update_speech_and_emotion)
     if chat_dialog_global.isHidden():
         print("显示聊天对话框...")
         chat_dialog_global.open_dialog()
@@ -272,6 +271,7 @@ def main():
     )
     pet_window_global.request_open_chat_dialog.connect(open_chat_dialog_handler)
     pet_window_global.show()
+    pet_window_global.set_speech_text("你好！我在这里哦！")
     exit_code = app.exec()
     if mongo_handler_global:
         mongo_handler_global.close_connection()
