@@ -5,7 +5,17 @@ __pycache__/
 
 # C extensions
 *.so
+config/settings.ini
 
+# 日志文件
+data/app.log
+*.log
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
 # Distribution / packaging
 .Python
 build/

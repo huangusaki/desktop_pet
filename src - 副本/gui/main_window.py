@@ -2,18 +2,12 @@ from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication, QMenu
 from PyQt6.QtGui import QPixmap, QMouseEvent, QGuiApplication, QAction
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal
 import os
-from typing import List
 
 
 class PetWindow(QWidget):
     request_open_chat_dialog = pyqtSignal()
 
-    def __init__(
-        self,
-        initial_image_path: str,
-        assets_base_path: str,
-        available_emotions: List[str],
-    ):
+    def __init__(self, initial_image_path: str, assets_base_path: str):
         super().__init__()
         self._drag_pos = QPoint()
         self.assets_base_path = assets_base_path
@@ -21,9 +15,6 @@ class PetWindow(QWidget):
         self.pixmap_cache = {}
         self.scaled_pixmap_cache = {}
         self._initial_pos_set = False
-        self.available_emotions_for_test = (
-            available_emotions if available_emotions else ["default"]
-        )
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -111,10 +102,6 @@ class PetWindow(QWidget):
                 screen_width = 1920
                 print("警告: 无法获取屏幕宽度，使用默认值 1920px")
             target_width = screen_width // 10
-            if target_width < 80:
-                target_width = 80
-            if target_width > 200:
-                target_width = 200
             cache_key_path = (
                 initial_image_path_override
                 if initial_image_path_override
@@ -211,18 +198,23 @@ class PetWindow(QWidget):
         realign_action = menu.addAction("重新对齐")
         realign_action.triggered.connect(self._auto_align_to_taskbar_right)
         menu.addSeparator()
-        testable_emotions = self.available_emotions_for_test
+        testable_emotions = [
+            "default",
+            "smile",
+            "shock",
+            "thinking",
+            "happy",
+            "sad",
+            "confused",
+        ]
         emotion_menu = menu.addMenu("测试情绪")
-        if testable_emotions:
-            for em in sorted(testable_emotions):
-                action = emotion_menu.addAction(em.capitalize())
-                action.triggered.connect(
-                    lambda checked=False, emotion_name_for_lambda=em: self.set_emotion(
-                        emotion_name_for_lambda
-                    )
+        for em in testable_emotions:
+            action = emotion_menu.addAction(em.capitalize())
+            action.triggered.connect(
+                lambda checked=False, emotion_name_for_lambda=em: self.set_emotion(
+                    emotion_name_for_lambda
                 )
-        else:
-            emotion_menu.addAction("无可用情绪").setEnabled(False)
+            )
         menu.addSeparator()
         exit_action = menu.addAction("退出程序")
         exit_action.triggered.connect(QApplication.instance().quit)

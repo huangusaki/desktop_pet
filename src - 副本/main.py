@@ -7,12 +7,11 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from src.utils.config_manager import ConfigManager
-from src.llm.gemini_client import GeminiClient, EmotionTypes
+from src.llm.gemini_client import GeminiClient
 from src.gui.main_window import PetWindow
 from src.gui.chat_dialog import ChatDialog
 from src.database.mongo_handler import MongoHandler
 from PIL import Image, ImageDraw, ImageFont
-from typing import List, Literal
 
 config_manager_global = None
 gemini_client_global = None
@@ -23,7 +22,6 @@ mongo_handler_global = None
 avatar_base_path_global = None
 pet_avatar_path_global = None
 user_avatar_path_global = None
-available_emotions_global: List[str] = ["default"]
 
 
 def create_placeholder_avatar(
@@ -53,34 +51,6 @@ def create_placeholder_avatar(
         print(f"为 {image_path} 创建占位头像图片失败: {e}")
 
 
-def scan_and_update_available_emotions(assets_path: str):
-    global available_emotions_global, EmotionTypes
-    if not os.path.isdir(assets_path):
-        print(
-            f"错误: 资源路径 {assets_path} 不是一个有效的目录。情绪列表将使用默认值。"
-        )
-        available_emotions_global = ["default"]
-    else:
-        found_emotions = set()
-        for filename in os.listdir(assets_path):
-            if filename.lower().endswith(".png"):
-                emotion_name = os.path.splitext(filename)[0].lower()
-                found_emotions.add(emotion_name)
-        if not found_emotions:
-            print(
-                f"警告: 在 {assets_path} 中未找到任何 .png 文件作为情绪。将使用 'default'。"
-            )
-            found_emotions.add("default")
-        elif "default" not in found_emotions:
-            print(
-                f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加一个作为后备。"
-            )
-        available_emotions_global = sorted(list(found_emotions))
-        if not available_emotions_global:
-            available_emotions_global = ["default"]
-    print(f"可用的情绪列表已更新: {available_emotions_global}")
-
-
 def setup_environment_and_config():
     global config_manager_global, assets_path_global, project_root
     global avatar_base_path_global, pet_avatar_path_global, user_avatar_path_global
@@ -88,7 +58,6 @@ def setup_environment_and_config():
     assets_path_global = os.path.normpath(os.path.join(project_root, "src", "assets"))
     os.makedirs(assets_path_global, exist_ok=True)
     os.makedirs(os.path.join(project_root, "data"), exist_ok=True)
-    scan_and_update_available_emotions(assets_path_global)
     config_file_relative_path = os.path.join("config", "settings.ini")
     actual_config_file_path = os.path.join(project_root, config_file_relative_path)
     if not os.path.exists(actual_config_file_path):
@@ -141,13 +110,6 @@ def setup_environment_and_config():
             size=(120, 120),
             bg_color=(200, 200, 200, 180),
         )
-        if (
-            initial_image_filename.lower() == "default.png"
-            and "default" not in available_emotions_global
-        ):
-            print("确保 'default' 情绪在可用列表中，因为初始图片是 default.png")
-            available_emotions_global.append("default")
-            available_emotions_global = sorted(list(set(available_emotions_global)))
     avatar_base_path_relative = config_manager_global.get_avatar_base_path_relative()
     avatar_base_path_global = os.path.normpath(
         os.path.join(project_root, avatar_base_path_relative)
@@ -176,7 +138,7 @@ def setup_environment_and_config():
 
 
 def initialize_services():
-    global gemini_client_global, config_manager_global, mongo_handler_global, available_emotions_global
+    global gemini_client_global, config_manager_global, mongo_handler_global
     api_key = config_manager_global.get_gemini_api_key()
     model_name = config_manager_global.get_gemini_model_name()
     pet_name = config_manager_global.get_pet_name()
@@ -206,7 +168,6 @@ def initialize_services():
             pet_name=pet_name,
             user_name=user_name,
             pet_persona=pet_persona,
-            available_emotions=available_emotions_global,
         )
         print("Gemini客户端初始化成功。")
     except ValueError as e:
@@ -254,7 +215,7 @@ def open_chat_dialog_handler():
 
 
 def main():
-    global pet_window_global, config_manager_global, assets_path_global, mongo_handler_global, available_emotions_global
+    global pet_window_global, config_manager_global, assets_path_global, mongo_handler_global
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     if not setup_environment_and_config():
@@ -268,7 +229,6 @@ def main():
     pet_window_global = PetWindow(
         initial_image_path=initial_pet_image_abs_path,
         assets_base_path=assets_path_global,
-        available_emotions=available_emotions_global,
     )
     pet_window_global.request_open_chat_dialog.connect(open_chat_dialog_handler)
     pet_window_global.show()
