@@ -25,40 +25,35 @@ class PetWindow(QWidget):
             available_emotions if available_emotions else ["default"]
         )
         self.pet_size_preference = "medium"
-
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0) # 整个窗口的边距
-        layout.setSpacing(2) # 图片和气泡之间的垂直间距
-
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.image_label)
-
         self.speech_bubble_label = QLabel(self)
         self.speech_bubble_label.setWordWrap(True)
         self.speech_bubble_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.speech_bubble_label.setStyleSheet(
             "QLabel {"
-            "  background-color: rgba(240, 240, 240, 220);" # 浅灰色背景，轻微透明
+            "  background-color: rgba(240, 240, 240, 220);"
             "  color: black;"
             "  padding: 8px;"
-            "  border-radius: 10px;" # 圆角
-            "  margin-left: 5px;"   # 气泡左右留出边距，使其不紧贴窗口边缘
+            "  border-radius: 10px;"
+            "  margin-left: 5px;"
             "  margin-right: 5px;"
-            "  margin-bottom: 5px;" # 气泡底部留出边距
+            "  margin-bottom: 5px;"
             "}"
         )
         self.speech_bubble_label.setText("")
-        self.speech_bubble_label.setVisible(False) # 初始隐藏
+        self.speech_bubble_label.setVisible(False)
         layout.addWidget(self.speech_bubble_label)
-        
         self.set_emotion(
             self.current_emotion, initial_image_path_override=initial_image_path
         )
@@ -68,11 +63,10 @@ class PetWindow(QWidget):
         self.image_label.setStyleSheet(
             "QLabel { color: red; background-color: rgba(200, 200, 200, 150); padding: 10px; }"
         )
-        if hasattr(self, 'speech_bubble_label'): # 确保 speech_bubble_label 已创建
+        if hasattr(self, "speech_bubble_label"):
             self.speech_bubble_label.setText("")
             self.speech_bubble_label.setVisible(False)
-        
-        self.resize(180, 120) # 错误提示固定大小
+        self.resize(180, 120)
         if self.isVisible():
             self._auto_align_to_taskbar_right()
 
@@ -83,9 +77,7 @@ class PetWindow(QWidget):
                 self.move(800, 600)
                 return
             available_geometry = screen.availableGeometry()
-            # 等待任何挂起的resize事件处理完成，确保self.width()和self.height()是最新的
             QApplication.instance().processEvents()
-            
             new_x = available_geometry.right() - self.width()
             new_y = available_geometry.bottom() - self.height()
             new_x = max(available_geometry.left(), new_x)
@@ -96,8 +88,8 @@ class PetWindow(QWidget):
             self.move(800, 600)
 
     def update_speech_and_emotion(self, text: str, emotion: str):
-        self.set_speech_text(text)  # 更新对话气泡的文本
-        self.set_emotion(emotion)   # 更新宠物的情绪（图片）
+        self.set_speech_text(text)
+        self.set_emotion(emotion)
 
     def set_emotion(self, emotion_name: str, initial_image_path_override: str = None):
         if not emotion_name or not isinstance(emotion_name, str):
@@ -110,8 +102,6 @@ class PetWindow(QWidget):
             target_image_path = os.path.join(
                 self.assets_base_path, f"{self.current_emotion}.png"
             )
-        
-        # 加载原始图片 (逻辑与之前类似)
         if target_image_path in self.pixmap_cache:
             raw_pixmap = self.pixmap_cache[target_image_path]
         elif os.path.exists(target_image_path):
@@ -128,7 +118,6 @@ class PetWindow(QWidget):
                 if not pixmap.isNull():
                     self.pixmap_cache[default_image_path] = pixmap
                     raw_pixmap = pixmap
-
         scaled_pixmap = None
         if raw_pixmap and not raw_pixmap.isNull():
             try:
@@ -136,20 +125,23 @@ class PetWindow(QWidget):
                 screen_width = screen.availableGeometry().width() if screen else 1920
             except Exception:
                 screen_width = 1920
-
             if self.pet_size_preference == "small":
-                base_divisor = 15; min_w, max_w = 60, 150
+                base_divisor = 15
+                min_w, max_w = 60, 150
             elif self.pet_size_preference == "large":
-                base_divisor = 7; min_w, max_w = 120, 300
-            else: # Medium
-                base_divisor = 10; min_w, max_w = 80, 200
-
+                base_divisor = 7
+                min_w, max_w = 120, 300
+            else:
+                base_divisor = 10
+                min_w, max_w = 80, 200
             target_width = screen_width // base_divisor
             target_width = max(min_w, min(target_width, max_w))
-                
-            cache_key_path = initial_image_path_override if initial_image_path_override else target_image_path
+            cache_key_path = (
+                initial_image_path_override
+                if initial_image_path_override
+                else target_image_path
+            )
             cache_key = (cache_key_path, target_width)
-
             if cache_key in self.scaled_pixmap_cache:
                 scaled_pixmap = self.scaled_pixmap_cache[cache_key]
             else:
@@ -160,30 +152,29 @@ class PetWindow(QWidget):
                     target_height = int(target_width * aspect_ratio)
                     if target_width > 0 and target_height > 0:
                         scaled_pixmap = raw_pixmap.scaled(
-                            target_width, target_height,
-                            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                            target_width,
+                            target_height,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
                         )
                         self.scaled_pixmap_cache[cache_key] = scaled_pixmap
-                    else: scaled_pixmap = raw_pixmap
-                else: scaled_pixmap = raw_pixmap
-        
+                    else:
+                        scaled_pixmap = raw_pixmap
+                else:
+                    scaled_pixmap = raw_pixmap
         if scaled_pixmap and not scaled_pixmap.isNull():
             self.image_label.setPixmap(scaled_pixmap)
-            self.image_label.adjustSize() # 图片标签自适应图片大小
-            
-            # 设置对话气泡的最大宽度为当前图片宽度
-            if hasattr(self, 'speech_bubble_label'):
+            self.image_label.adjustSize()
+            if hasattr(self, "speech_bubble_label"):
                 img_width = self.image_label.width()
                 if img_width > 0:
                     self.speech_bubble_label.setMaximumWidth(img_width)
-                else: # 图片宽度无效时的后备
-                    self.speech_bubble_label.setMaximumWidth(150) 
-
-            self.adjustSize() # 整个 PetWindow 自适应内容（图片+气泡）
+                else:
+                    self.speech_bubble_label.setMaximumWidth(150)
+            self.adjustSize()
         else:
             self._set_error_text(f"图片丢失\nEm: {self.current_emotion}")
-            return # _set_error_text 会处理窗口大小和对齐
-        
+            return
         if self.isVisible():
             self._auto_align_to_taskbar_right()
 
@@ -194,15 +185,14 @@ class PetWindow(QWidget):
         else:
             self.speech_bubble_label.setText("")
             self.speech_bubble_label.setVisible(False)
-
-        self.adjustSize() # PetWindow 调整大小以适应变化后的气泡
+        self.adjustSize()
         if self.isVisible():
             self._auto_align_to_taskbar_right()
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._initial_pos_set:
-            self._auto_align_to_taskbar_right() # 确保在首次显示时对齐
+            self._auto_align_to_taskbar_right()
             self._initial_pos_set = True
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
@@ -221,10 +211,9 @@ class PetWindow(QWidget):
             self._is_dragging = True
             event.accept()
         elif event.button() == Qt.MouseButton.LeftButton:
-            # 左键单击（非拖拽时）也重新对齐，以防意外移动
             if not (hasattr(self, "_is_dragging") and self._is_dragging):
-                 self._auto_align_to_taskbar_right()
-            event.ignore() # ignore让双击事件可以被处理
+                self._auto_align_to_taskbar_right()
+            event.ignore()
         else:
             event.ignore()
 
@@ -246,7 +235,6 @@ class PetWindow(QWidget):
             and self._is_dragging
         ):
             self._is_dragging = False
-            # 拖拽释放后，可以选择是否自动对齐，当前不自动对齐，允许用户自由放置
             event.accept()
         else:
             event.ignore()
@@ -254,40 +242,33 @@ class PetWindow(QWidget):
     def _set_pet_size(self, size_name: str):
         if self.pet_size_preference != size_name:
             self.pet_size_preference = size_name
-            self.scaled_pixmap_cache.clear() 
-            self.set_emotion(self.current_emotion) # set_emotion 会处理对齐
-
+            self.scaled_pixmap_cache.clear()
+            self.set_emotion(self.current_emotion)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         realign_action = menu.addAction("重新对齐")
         realign_action.triggered.connect(self._auto_align_to_taskbar_right)
         menu.addSeparator()
-
         size_menu = menu.addMenu("调整大小")
         size_action_group = QActionGroup(self)
         size_action_group.setExclusive(True)
-
         small_action = size_menu.addAction("小")
         small_action.setCheckable(True)
         small_action.setChecked(self.pet_size_preference == "small")
         small_action.triggered.connect(lambda: self._set_pet_size("small"))
         size_action_group.addAction(small_action)
-
         medium_action = size_menu.addAction("中 (默认)")
         medium_action.setCheckable(True)
         medium_action.setChecked(self.pet_size_preference == "medium")
         medium_action.triggered.connect(lambda: self._set_pet_size("medium"))
         size_action_group.addAction(medium_action)
-        
         large_action = size_menu.addAction("大")
         large_action.setCheckable(True)
         large_action.setChecked(self.pet_size_preference == "large")
         large_action.triggered.connect(lambda: self._set_pet_size("large"))
         size_action_group.addAction(large_action)
-        
         menu.addSeparator()
-        
         testable_emotions = self.available_emotions_for_test
         emotion_menu = menu.addMenu("测试情绪")
         if testable_emotions:

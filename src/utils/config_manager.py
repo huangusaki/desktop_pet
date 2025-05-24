@@ -72,3 +72,35 @@ class ConfigManager:
         except ValueError:
             print("警告: MONGODB HISTORY_COUNT_FOR_PROMPT 值无效，将使用默认值 5。")
             return 5
+
+    def get_screen_analysis_enabled(self) -> bool:
+        return self.config.getboolean("SCREEN_ANALYSIS", "ENABLED", fallback=False)
+
+    def get_screen_analysis_interval_seconds(self) -> int:
+        try:
+            val = self.config.getint("SCREEN_ANALYSIS", "INTERVAL_SECONDS", fallback=60)
+            return max(5, val)
+        except ValueError:
+            print("警告: SCREEN_ANALYSIS INTERVAL_SECONDS 值无效，将使用默认值 60。")
+            return 60
+
+    def get_screen_analysis_chance(self) -> float:
+        try:
+            val = self.config.getfloat("SCREEN_ANALYSIS", "CHANCE", fallback=0.1)
+            return max(0.0, min(1.0, val))
+        except ValueError:
+            print("警告: SCREEN_ANALYSIS CHANCE 值无效，将使用默认值 0.1。")
+            return 0.1
+
+    def get_screen_analysis_prompt(self) -> str:
+        default_prompt = (
+            "你是{pet_name}，一个可爱的桌面宠物。这张图片是用户当前的屏幕截图。\n"
+            "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想，就像你碰巧看到了什么有趣或值得一提的事情一样。\n"
+            "不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
+            "例如，如果屏幕是代码编辑器，你可以说：“哇，这些代码看起来好复杂呀！”或者“主人又在努力工作啦？”\n"
+            "如果屏幕是视频网站，你可以说：“这个视频看起来很有趣呢！”\n"
+            "你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。\n"
+            '例如：{{"text": "这些代码看起来好复杂呀！", "emotion": "curious"}}'
+        )
+        prompt = self.config.get("SCREEN_ANALYSIS", "PROMPT", fallback=default_prompt)
+        return prompt.strip()
