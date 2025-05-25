@@ -4,6 +4,7 @@ import random
 import time
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer, QEventLoop, pyqtSlot
 from PyQt6.QtWidgets import QApplication
+from ..utils.prompt_builder import PromptBuilder
 
 try:
     from PIL import ImageGrab, Image
@@ -24,18 +25,19 @@ class ScreenAnalysisWorker(QObject):
     def __init__(
         self,
         gemini_client,
-        prompt_template: str,
+        prompt_builder: PromptBuilder,
         pet_name: str,
         user_name: str,
         available_emotions: list,
     ):
         super().__init__()
         self.gemini_client = gemini_client
-        self.prompt_template = prompt_template
+        self.prompt_builder = prompt_builder
         self.pet_name = pet_name
         self.user_name = user_name
         self.available_emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         self._is_running = True
+        self.available_emotions_list = available_emotions
         self._screenshot_loop = None
         self.gui_is_ready_for_grab.connect(self._perform_grab_and_process)
 
@@ -83,10 +85,10 @@ class ScreenAnalysisWorker(QObject):
             mime_type = "image/jpeg"
             if not self._is_running:
                 return
-            final_prompt_text = self.prompt_template.format(
+            final_prompt_text = self.prompt_builder.build_screen_analysis_prompt(
                 pet_name=self.pet_name,
                 user_name=self.user_name,
-                available_emotions_str=self.available_emotions_str,
+                available_emotions=self.available_emotions_list,
             )
             response_data = self.gemini_client.send_message_with_image(
                 image_bytes=img_bytes,
@@ -114,6 +116,7 @@ class ScreenAnalyzer(QObject):
     def __init__(
         self,
         gemini_client,
+        prompt_builder: PromptBuilder,
         config_manager,
         pet_window,
         pet_name: str,
@@ -125,14 +128,14 @@ class ScreenAnalyzer(QObject):
         self.gemini_client = gemini_client
         self.config_manager = config_manager
         self.pet_window = pet_window
+        self.prompt_builder = prompt_builder
         self.pet_name = pet_name
         self.user_name = user_name
-        self.available_emotions = available_emotions
+        self.available_emotions_list = available_emotions
         self._pet_was_visible_before_grab = False
         self._is_enabled = False
         self._interval_ms = 60000
         self._analysis_chance = 0.1
-        self._prompt_template = ""
         self._load_config()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._check_and_analyze_wrapper)
@@ -147,9 +150,8 @@ class ScreenAnalyzer(QObject):
         interval_seconds = self.config_manager.get_screen_analysis_interval_seconds()
         self._interval_ms = interval_seconds * 1000
         self._analysis_chance = self.config_manager.get_screen_analysis_chance()
-        self._prompt_template = self.config_manager.get_screen_analysis_prompt()
         print(
-            f"ScreenAnalyzer Config: Enabled={self._is_enabled}, Interval={interval_seconds}s, Chance={self._analysis_chance*100}%, Prompt loaded."
+            f"ScreenAnalyzer Config: Enabled={self._is_enabled}, Interval={interval_seconds}s, Chance={self._analysis_chance*100}%, Prompt generation delegated to PromptBuilder."
         )
 
     def start_monitoring(self):
@@ -190,10 +192,10 @@ class ScreenAnalyzer(QObject):
         print("ScreenAnalyzer: Initiating analysis sequence.")
         self.worker = ScreenAnalysisWorker(
             gemini_client=self.gemini_client,
-            prompt_template=self._prompt_template,
+            prompt_builder=self.prompt_builder,
             pet_name=self.pet_name,
             user_name=self.user_name,
-            available_emotions=self.available_emotions,
+            available_emotions=self.available_emotions_list,
         )
         self.analysis_thread = QThread()
         self.worker.moveToThread(self.analysis_thread)

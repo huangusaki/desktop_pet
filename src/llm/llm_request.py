@@ -10,6 +10,21 @@ import aiohttp
 import os
 from google import genai
 from google.genai import types as google_genai_types
+
+try:
+    from google.api_core import exceptions as google_api_core_exceptions
+
+    ResourceExhaustedException = google_api_core_exceptions.ResourceExhausted
+    InvalidArgumentException = google_api_core_exceptions.InvalidArgument
+    PermissionDeniedException = google_api_core_exceptions.PermissionDenied
+    InternalServerErrorException = google_api_core_exceptions.InternalServerError
+    ServiceUnavailableException = google_api_core_exceptions.ServiceUnavailable
+except ImportError:
+    ResourceExhaustedException = None
+    InvalidArgumentException = None
+    PermissionDeniedException = None
+    InternalServerErrorException = None
+    ServiceUnavailableException = None
 from pymongo.database import Database
 import logging
 import random
@@ -25,7 +40,6 @@ if not logger.hasHandlers():
 def compress_base64_image_by_scale(
     base64_data: str, target_size: int = 0.8 * 1024 * 1024
 ) -> str:
-    """压缩base64格式的图片到指定大小"""
     try:
         image_data = base64.b64decode(base64_data)
         if len(image_data) <= target_size:
@@ -33,40 +47,46 @@ def compress_base64_image_by_scale(
         img = Image.open(io.BytesIO(image_data))
         original_width, original_height = img.size
         current_quality = 85
-        current_scale = 1.0
-        if len(image_data) > target_size:
-            scale_factor = (target_size / len(image_data)) ** 0.5
-            current_scale = min(0.9, scale_factor) if scale_factor < 1.0 else 0.9
+        scale = (
+            (target_size / len(image_data)) ** 0.5
+            if len(image_data) > target_size
+            else 1.0
+        )
+        scale = min(scale, 0.95)
+        compressed_data_to_return_if_loop_fails = image_data
         for attempt in range(5):
-            new_width = int(original_width * current_scale)
-            new_height = int(original_height * current_scale)
+            new_width = int(original_width * scale)
+            new_height = int(original_height * scale)
             if new_width <= 0 or new_height <= 0:
                 logger.warning(
-                    f"压缩图片：计算出的新尺寸无效 ({new_width}x{new_height})，源尺寸 {original_width}x{original_height}, 缩放比例 {current_scale:.2f}。将使用原始图片。"
+                    f"计算出的新尺寸无效 ({new_width}x{new_height})，源尺寸 {original_width}x{original_height}, 缩放比例 {scale:.2f}。将使用原始图片。"
                 )
                 return base64_data
             output_buffer = io.BytesIO()
-            img_format_to_save = img.format if img.format in ["PNG", "WEBP"] else "JPEG"
-            temp_img = img.copy()
+            img_format_to_save = (
+                img.format
+                if img.format and img.format.upper() in ["PNG", "WEBP", "GIF"]
+                else "JPEG"
+            )
+            temp_img_copy = img.copy()
             if (
-                getattr(temp_img, "is_animated", False)
-                and temp_img.n_frames > 1
-                and img.format == "GIF"
+                img_format_to_save == "GIF"
+                and getattr(temp_img_copy, "is_animated", False)
+                and temp_img_copy.n_frames > 1
             ):
                 frames = []
                 durations = []
-                loop = temp_img.info.get("loop", 0)
+                loop = temp_img_copy.info.get("loop", 0)
                 try:
-                    temp_img.seek(0)
-                    while True:
-                        current_duration = temp_img.info.get("duration", 100)
+                    for frame_idx in range(temp_img_copy.n_frames):
+                        temp_img_copy.seek(frame_idx)
+                        current_duration = temp_img_copy.info.get("duration", 100)
                         durations.append(current_duration)
-                        frame_copy = temp_img.convert("RGBA")
-                        resized_frame = frame_copy.resize(
+                        frame_rgba = temp_img_copy.convert("RGBA")
+                        resized_frame = frame_rgba.resize(
                             (new_width, new_height), Image.Resampling.LANCZOS
                         )
                         frames.append(resized_frame)
-                        temp_img.seek(temp_img.tell() + 1)
                 except EOFError:
                     pass
                 if frames:
@@ -80,15 +100,23 @@ def compress_base64_image_by_scale(
                         loop=loop,
                         disposal=2,
                     )
-                    img_format_to_save = "GIF"
                 else:
                     img_format_to_save = "JPEG"
             if img_format_to_save != "GIF":
-                resized_img = temp_img.resize(
+                resized_img = temp_img_copy.resize(
                     (new_width, new_height), Image.Resampling.LANCZOS
                 )
                 if img_format_to_save == "PNG":
-                    resized_img.save(output_buffer, format="PNG", optimize=True)
+                    if resized_img.mode == "RGBA" or "A" in resized_img.mode:
+                        resized_img.save(output_buffer, format="PNG", optimize=True)
+                    else:
+                        resized_img.convert("RGB").save(
+                            output_buffer,
+                            format="JPEG",
+                            quality=current_quality,
+                            optimize=True,
+                        )
+                        img_format_to_save = "JPEG"
                 elif img_format_to_save == "WEBP":
                     resized_img.save(
                         output_buffer,
@@ -106,24 +134,26 @@ def compress_base64_image_by_scale(
                         quality=current_quality,
                         optimize=True,
                     )
-            compressed_data = output_buffer.getvalue()
-            if len(compressed_data) <= target_size:
+            compressed_data_loop = output_buffer.getvalue()
+            compressed_data_to_return_if_loop_fails = compressed_data_loop
+            if len(compressed_data_loop) <= target_size:
+                final_format_check = Image.open(io.BytesIO(compressed_data_loop)).format
                 logger.info(
-                    f"压缩图片 (尝试 {attempt+1}): {original_width}x{original_height} ({img.format or 'N/A'}) -> {new_width}x{new_height} ({img_format_to_save}). "
-                    f"大小: {len(image_data) / 1024:.1f}KB -> {len(compressed_data) / 1024:.1f}KB (目标: {target_size / 1024:.1f}KB)"
+                    f"压缩图片 (尝试 {attempt+1}): {original_width}x{original_height} ({img.format or 'N/A'} -> {final_format_check or img_format_to_save}). "
+                    f"大小: {len(image_data) / 1024:.1f}KB -> {len(compressed_data_loop) / 1024:.1f}KB (目标: {target_size / 1024:.1f}KB)"
                 )
-                return base64.b64encode(compressed_data).decode("utf-8")
-            if img_format_to_save in ["JPEG", "WEBP"] and current_quality > 50:
+                return base64.b64encode(compressed_data_loop).decode("utf-8")
+            if img_format_to_save in ["JPEG", "WEBP"] and current_quality > 60:
                 current_quality -= 10
             else:
-                current_scale *= 0.80
+                scale *= 0.85
             logger.info(
-                f"压缩后仍然过大 (尝试 {attempt+1}): {len(compressed_data)/1024:.1f}KB. 下次尝试 scale={current_scale:.2f}, quality={current_quality}"
+                f"压缩后仍然过大 (尝试 {attempt+1}, {len(compressed_data_loop)/1024:.1f}KB). 下次 scale={scale:.2f}, quality={current_quality}"
             )
         logger.warning(
-            f"多次压缩后大小 {len(compressed_data) / 1024:.1f}KB 仍大于目标 {target_size / 1024:.1f}KB. 返回当前最佳压缩结果。"
+            f"多次压缩后大小 {len(compressed_data_to_return_if_loop_fails) / 1024:.1f}KB 仍大于目标 {target_size / 1024:.1f}KB. 返回当前最佳压缩结果。"
         )
-        return base64.b64encode(compressed_data).decode("utf-8")
+        return base64.b64encode(compressed_data_to_return_if_loop_fails).decode("utf-8")
     except Exception as e:
         logger.error(f"压缩图片失败: {str(e)}")
         import traceback
@@ -208,7 +238,6 @@ class LLM_request:
         self.base_url_actual: Optional[str] = model_config.get("base_url")
         self.current_key_index = 0
         self._clients: List[genai.Client] = []
-        self._async_clients: List[genai.Client] = []
         self.is_google_genai_model = (
             not self.base_url_actual or "googleapis.com" in self.base_url_actual
         )
@@ -216,9 +245,7 @@ class LLM_request:
             for key_val in self.api_keys_actual:
                 try:
                     client_instance = genai.Client(api_key=key_val)
-                    async_client_instance = genai.Client(api_key=key_val)
                     self._clients.append(client_instance)
-                    self._async_clients.append(async_client_instance)
                 except Exception as e:
                     logger.error(
                         f"为模型 {self.model_name} 使用 API Key ...{key_val[-4:]} 初始化 Google GenAI Client 失败: {e}"
@@ -327,13 +354,6 @@ class LLM_request:
             )
         return self._clients[self.current_key_index]
 
-    def _get_current_async_client(self) -> genai.Client:
-        if not self._async_clients:
-            raise RuntimeError(
-                f"模型 ({self.model_name}) 没有可用的 Google GenAI 异步客户端。"
-            )
-        return self._async_clients[self.current_key_index]
-
     def _get_current_api_key_for_http(self) -> str:
         if not self.api_keys_actual:
             raise RuntimeError(f"模型 ({self.model_name}) 没有可用的 API Keys。")
@@ -355,11 +375,23 @@ class LLM_request:
 
     def _build_google_sdk_config(
         self, overrides: Optional[Dict[str, Any]] = None
-    ) -> Optional[google_genai_types.GenerationConfig]:
+    ) -> Optional[google_genai_types.GenerateContentConfig]:
         effective_params = self.params.copy()
         if overrides:
             effective_params.update(overrides)
         config_args = {}
+        if "system_instruction" in effective_params:
+            config_args["system_instruction"] = effective_params["system_instruction"]
+        if "tools" in effective_params:
+            config_args["tools"] = effective_params["tools"]
+        if "tool_config" in effective_params:
+            config_args["tool_config"] = effective_params["tool_config"]
+        if "safety_settings" in effective_params:
+            config_args["safety_settings"] = effective_params["safety_settings"]
+        if "response_mime_type" in effective_params:
+            config_args["response_mime_type"] = effective_params["response_mime_type"]
+        if "response_schema" in effective_params:
+            config_args["response_schema"] = effective_params["response_schema"]
         if "candidate_count" in effective_params:
             config_args["candidate_count"] = int(effective_params["candidate_count"])
         if (
@@ -380,13 +412,15 @@ class LLM_request:
             config_args["top_p"] = float(effective_params["top_p"])
         if "top_k" in effective_params:
             config_args["top_k"] = int(effective_params["top_k"])
+        if "seed" in effective_params:
+            config_args["seed"] = int(effective_params["seed"])
         if not config_args:
             return None
         try:
-            return google_genai_types.GenerationConfig(**config_args)
+            return google_genai_types.GenerateContentConfig(**config_args)
         except Exception as e:
             logger.error(
-                f"创建 Google SDK GenerationConfig 失败: {e}. 参数: {config_args}"
+                f"创建 Google SDK GenerateContentConfig 失败: {e}. 参数: {config_args}"
             )
             raise
 
@@ -422,8 +456,8 @@ class LLM_request:
         max_retries = self.params.get(
             "max_retries", int(os.getenv("LLM_MAX_RETRIES", "3"))
         )
+        current_sdk_client = self._get_current_sync_client()
         for attempt in range(max_retries):
-            async_client = self._get_current_async_client()
             try:
                 logger.debug(
                     f"Attempt {attempt+1}/{max_retries} - Google SDK ({self.model_name}) using Key #{self.current_key_index + 1}"
@@ -433,196 +467,173 @@ class LLM_request:
                         raise ValueError(
                             "Embedding input for Google GenAI SDK must be a string for this wrapper."
                         )
-                    task_type_str = (config_overrides_dict or {}).get(
+                    task_type_for_embed = (config_overrides_dict or {}).get(
                         "task_type", "RETRIEVAL_DOCUMENT"
                     )
-                    embedding_model_name = (config_overrides_dict or {}).get(
+                    model_name_for_embed = (config_overrides_dict or {}).get(
                         "model", self.model_name
                     )
-                    response_object = await async_client.embed_content(
-                        model=f"models/{embedding_model_name}",
-                        content=contents,
-                        task_type=task_type_str,
+                    if model_name_for_embed.startswith("models/"):
+                        model_name_for_embed = model_name_for_embed.split("/")[-1]
+                    response_object = await asyncio.to_thread(
+                        current_sdk_client.models.embed_content,
+                        model=model_name_for_embed,
+                        contents=contents,
+                        task_type=task_type_for_embed,
                     )
-                    embedding_vector = (
-                        response_object.get("embedding")
-                        if isinstance(response_object, dict)
-                        else getattr(response_object, "embedding", None)
+                    embedding_vector_result = getattr(
+                        response_object, "embedding", None
                     )
-                    if embedding_vector:
+                    if embedding_vector_result:
                         self._record_usage(
                             None, None, None, user_id, request_type, "embedContent"
                         )
-                        return embedding_vector
+                        return embedding_vector_result
                     else:
                         raise ValueError(
-                            "Google GenAI Embedding response did not contain an embedding vector."
+                            f"Google GenAI Embedding response did not contain an embedding vector. Response: {response_object}"
                         )
                 else:
-                    generation_config_sdk = self._build_google_sdk_config(
+                    sdk_gen_config = self._build_google_sdk_config(
                         config_overrides_dict
                     )
-                    request_params = {}
-                    if config_overrides_dict:
-                        if "system_instruction" in config_overrides_dict:
-                            request_params["system_instruction"] = (
-                                google_genai_types.Content(
-                                    role="system",
-                                    parts=[
-                                        google_genai_types.Part(
-                                            text=config_overrides_dict[
-                                                "system_instruction"
-                                            ]
-                                        )
-                                    ],
-                                )
-                            )
-                        if "tools" in config_overrides_dict:
-                            request_params["tools"] = config_overrides_dict["tools"]
-                        if "tool_config" in config_overrides_dict:
-                            request_params["tool_config"] = config_overrides_dict[
-                                "tool_config"
-                            ]
-                        if "safety_settings" in config_overrides_dict:
-                            request_params["safety_settings"] = config_overrides_dict[
-                                "safety_settings"
-                            ]
-                    generation_model_name = (config_overrides_dict or {}).get(
+                    model_name_for_gen = (config_overrides_dict or {}).get(
                         "model", self.model_name
                     )
-                    model_to_call = (
-                        generation_model_name
-                        if generation_model_name.startswith("models/")
-                        else f"models/{generation_model_name}"
-                    )
-                    model_obj = async_client.get_model(model_to_call)
-                    sdk_contents = []
+                    if model_name_for_gen.startswith("models/"):
+                        model_name_for_gen = model_name_for_gen.split("/")[-1]
+                    actual_contents_for_api = []
                     if isinstance(contents, str):
-                        sdk_contents.append(google_genai_types.Part(text=contents))
+                        actual_contents_for_api.append(contents)
                     elif isinstance(contents, list):
-                        for item in contents:
-                            if isinstance(item, str):
-                                sdk_contents.append(google_genai_types.Part(text=item))
-                            elif isinstance(item, Image.Image):
-                                img_byte_arr = io.BytesIO()
-                                format = (
-                                    item.format
-                                    if item.format
-                                    in ["PNG", "JPEG", "WEBP", "HEIC", "HEIF"]
-                                    else "PNG"
-                                )
-                                if format == "JPEG" and item.mode == "RGBA":
-                                    item = item.convert("RGB")
-                                item.save(img_byte_arr, format=format)
-                                sdk_contents.append(
+                        processed_parts = []
+                        for item_part in contents:
+                            if isinstance(item_part, str):
+                                processed_parts.append(item_part)
+                            elif isinstance(item_part, Image.Image):
+                                processed_parts.append(item_part)
+                            elif isinstance(item_part, google_genai_types.Part):
+                                processed_parts.append(item_part)
+                            elif isinstance(item_part, dict) and "text" in item_part:
+                                processed_parts.append(item_part["text"])
+                            elif (
+                                isinstance(item_part, dict)
+                                and "inline_data" in item_part
+                            ):
+                                processed_parts.append(
                                     google_genai_types.Part(
-                                        inline_data=google_genai_types.Blob(
-                                            mime_type=Image.MIME.get(
-                                                format, f"image/{format.lower()}"
-                                            ),
-                                            data=img_byte_arr.getvalue(),
-                                        )
+                                        inline_data=item_part["inline_data"]
                                     )
                                 )
-                            elif isinstance(
-                                item, google_genai_types.Part
-                            ) or isinstance(item, google_genai_types.Content):
-                                sdk_contents.append(item)
                             else:
                                 logger.warning(
-                                    f"Unsupported item type in contents list: {type(item)}"
+                                    f"Unsupported item type in contents list for generation: {type(item_part)}"
                                 )
+                        actual_contents_for_api = processed_parts
                     else:
-                        sdk_contents = contents
-                    stream_mode = self.params.get("stream", False) or (
+                        actual_contents_for_api = contents
+                    is_stream_request = self.params.get("stream", False) or (
                         config_overrides_dict or {}
                     ).get("stream", False)
-                    response_obj_or_stream = await model_obj.generate_content(
-                        contents=sdk_contents,
-                        generation_config=generation_config_sdk,
-                        stream=stream_mode,
-                        **request_params,
-                    )
-                    text_content = ""
-                    usage_metadata = None
-                    raw_response_for_sdk_response = None
-                    if stream_mode:
-                        accumulated_content = []
-                        raw_chunks_list = []
-                        async for chunk in response_obj_or_stream:
-                            raw_chunks_list.append(chunk)
-                            if chunk.parts:
-                                for part in chunk.parts:
-                                    if hasattr(part, "text"):
-                                        accumulated_content.append(part.text)
-                            if (
-                                hasattr(chunk, "usage_metadata")
-                                and chunk.usage_metadata
-                            ):
-                                usage_metadata = chunk.usage_metadata
-                        text_content = "".join(accumulated_content)
-                        raw_response_for_sdk_response = raw_chunks_list
-                    else:
-                        response_obj = response_obj_or_stream
-                        raw_response_for_sdk_response = response_obj
-                        if response_obj.parts:
-                            text_content = "".join(
-                                part.text
-                                for part in response_obj.parts
-                                if hasattr(part, "text")
-                            )
-                        usage_metadata = getattr(response_obj, "usage_metadata", None)
-                    p_tokens, c_tokens, t_tokens = None, None, None
-                    if usage_metadata:
-                        p_tokens = getattr(usage_metadata, "prompt_token_count", None)
-                        cand_tokens_val = getattr(
-                            usage_metadata, "candidates_token_count", None
+                    text_content_output = ""
+                    usage_metadata_from_sdk = None
+                    raw_response_data = None
+                    if is_stream_request:
+                        response_stream_iter = await asyncio.to_thread(
+                            current_sdk_client.models.generate_content_stream,
+                            model=model_name_for_gen,
+                            contents=actual_contents_for_api,
+                            config=sdk_gen_config,
                         )
-                        if isinstance(cand_tokens_val, list) and cand_tokens_val:
-                            c_tokens = sum(cand_tokens_val)
-                        elif isinstance(cand_tokens_val, int):
-                            c_tokens = cand_tokens_val
-                        t_tokens = getattr(usage_metadata, "total_token_count", None)
+                        accumulated_text_chunks = []
+                        chunk_list_for_raw = []
+                        for stream_chunk in response_stream_iter:
+                            chunk_list_for_raw.append(stream_chunk)
+                            accumulated_text_chunks.append(stream_chunk.text)
+                            if (
+                                hasattr(stream_chunk, "usage_metadata")
+                                and stream_chunk.usage_metadata
+                            ):
+                                usage_metadata_from_sdk = stream_chunk.usage_metadata
+                        text_content_output = "".join(accumulated_text_chunks)
+                        raw_response_data = chunk_list_for_raw
+                    else:
+                        sdk_response_obj = await asyncio.to_thread(
+                            current_sdk_client.models.generate_content,
+                            model=model_name_for_gen,
+                            contents=actual_contents_for_api,
+                            config=sdk_gen_config,
+                        )
+                        raw_response_data = sdk_response_obj
+                        text_content_output = sdk_response_obj.text
+                        usage_metadata_from_sdk = getattr(
+                            sdk_response_obj, "usage_metadata", None
+                        )
+                    prompt_tokens, completion_tokens, total_tokens = None, None, None
+                    if usage_metadata_from_sdk:
+                        prompt_tokens = getattr(
+                            usage_metadata_from_sdk, "prompt_token_count", None
+                        )
+                        cand_tokens_sdk = getattr(
+                            usage_metadata_from_sdk, "candidates_token_count", None
+                        )
+                        if isinstance(cand_tokens_sdk, list) and cand_tokens_sdk:
+                            completion_tokens = sum(cand_tokens_sdk)
+                        elif isinstance(cand_tokens_sdk, int):
+                            completion_tokens = cand_tokens_sdk
+                        total_tokens = getattr(
+                            usage_metadata_from_sdk, "total_token_count", None
+                        )
                     self._record_usage(
-                        p_tokens,
-                        c_tokens,
-                        t_tokens,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
                         user_id,
                         request_type,
                         "generateContent",
                     )
-                    content_cleaned, reasoning_text = self._extract_reasoning_sdk(
-                        text_content
+                    final_cleaned_content, final_reasoning = (
+                        self._extract_reasoning_sdk(text_content_output)
                     )
-                    web_searches = None
-                    candidate_for_grounding = None
-                    if not stream_mode and response_obj_or_stream.candidates:
-                        candidate_for_grounding = response_obj_or_stream.candidates[0]
-                    elif (
-                        stream_mode
-                        and raw_chunks_list
-                        and raw_chunks_list[-1].candidates
+                    web_queries_found = None
+                    final_response_object_for_grounding = None
+                    if is_stream_request:
+                        if (
+                            chunk_list_for_raw
+                            and hasattr(chunk_list_for_raw[-1], "candidates")
+                            and chunk_list_for_raw[-1].candidates
+                        ):
+                            final_response_object_for_grounding = chunk_list_for_raw[-1]
+                    else:
+                        final_response_object_for_grounding = sdk_response_obj
+                    if (
+                        final_response_object_for_grounding
+                        and hasattr(final_response_object_for_grounding, "candidates")
+                        and final_response_object_for_grounding.candidates
                     ):
-                        candidate_for_grounding = raw_chunks_list[-1].candidates[0]
-                    if candidate_for_grounding:
-                        gm = getattr(
-                            candidate_for_grounding, "grounding_metadata", None
+                        candidate_obj = final_response_object_for_grounding.candidates[
+                            0
+                        ]
+                        grounding_data = getattr(
+                            candidate_obj, "grounding_metadata", None
                         )
                         if (
-                            gm
-                            and hasattr(gm, "web_search_queries")
-                            and gm.web_search_queries
+                            grounding_data
+                            and hasattr(grounding_data, "web_search_queries")
+                            and grounding_data.web_search_queries
                         ):
-                            web_searches = list(gm.web_search_queries)
-                            logger.info(f"提取到 Web 搜索查询 (SDK): {web_searches}")
+                            web_queries_found = list(grounding_data.web_search_queries)
+                            logger.info(
+                                f"提取到 Web 搜索查询 (SDK): {web_queries_found}"
+                            )
                     return GeminiSDKResponse(
-                        content=content_cleaned,
-                        reasoning=reasoning_text,
-                        web_search_queries=web_searches,
-                        prompt_tokens=p_tokens,
-                        completion_tokens=c_tokens,
-                        total_tokens=t_tokens,
-                        raw_response=raw_response_for_sdk_response,
+                        content=final_cleaned_content,
+                        reasoning=final_reasoning,
+                        web_search_queries=web_queries_found,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        raw_response=raw_response_data,
                     )
             except Exception as e:
                 last_exception = e
@@ -632,34 +643,50 @@ class LLM_request:
                 logger.warning(
                     f"Google SDK ({self.model_name}) 失败 (尝试 {attempt+1}/{max_retries}): {type(e).__name__} - {e}\n{traceback.format_exc()}"
                 )
-                is_rate_limit = (
+                is_rate_limit_typed = ResourceExhaustedException and isinstance(
+                    e, ResourceExhaustedException
+                )
+                is_invalid_arg_typed = InvalidArgumentException and isinstance(
+                    e, InvalidArgumentException
+                )
+                is_auth_error_typed = PermissionDeniedException and isinstance(
+                    e, PermissionDeniedException
+                )
+                is_server_error_typed = (
+                    InternalServerErrorException
+                    and isinstance(e, InternalServerErrorException)
+                ) or (
+                    ServiceUnavailableException
+                    and isinstance(e, ServiceUnavailableException)
+                )
+                is_rate_limit_str = (
                     "rate limit" in error_str
                     or "429" in error_str
                     or "resource_exhausted" in error_str
-                    or isinstance(e, google_genai_types.обычноResourceExhausted)
                 )
-                is_server_error = (
+                is_server_error_str = (
                     "server error" in error_str
                     or "500" in error_str
                     or "unavailable" in error_str
                     or "503" in error_str
-                    or isinstance(e, google_genai_types.InternalServerError)
-                    or isinstance(e, google_genai_types.ServiceUnavailableError)
                 )
-                is_auth_error = (
+                is_auth_error_str = (
                     "permission_denied" in error_str
                     or "invalid api key" in error_str
                     or "401" in error_str
                     or "403" in error_str
                     or "unauthenticated" in error_str
-                    or isinstance(e, google_genai_types.PermissionDenied)
                 )
-                is_invalid_arg = (
+                is_invalid_arg_str = (
                     "invalid argument" in error_str
                     or "400" in error_str
                     or "could not parse" in error_str
-                    or isinstance(e, google_genai_types.InvalidArgumentError)
+                    or "bad request" in error_str
                 )
+                is_rate_limit = is_rate_limit_typed or is_rate_limit_str
+                is_server_error = is_server_error_typed or is_server_error_str
+                is_auth_error = is_auth_error_typed or is_auth_error_str
+                is_invalid_arg = is_invalid_arg_typed or is_invalid_arg_str
                 if is_auth_error or is_invalid_arg:
                     self._record_usage(
                         None,
@@ -674,11 +701,15 @@ class LLM_request:
                     raise RuntimeError(f"Google SDK 请求失败，不可重试: {e}") from e
                 if attempt < max_retries - 1:
                     if is_rate_limit or is_server_error:
-                        self._switch_key()
-                    base_wait = self.params.get("base_retry_wait_seconds", 5)
-                    wait_time = base_wait * (2**attempt) + random.uniform(0, 1)
-                    logger.info(f"等待 {wait_time:.2f} 秒后重试...")
-                    await asyncio.sleep(wait_time)
+                        switched_key_successfully = self._switch_key()
+                        if switched_key_successfully:
+                            current_sdk_client = self._get_current_sync_client()
+                    base_retry_delay = self.params.get("base_retry_wait_seconds", 5)
+                    current_wait_time = base_retry_delay * (
+                        2**attempt
+                    ) + random.uniform(0, 1)
+                    logger.info(f"等待 {current_wait_time:.2f} 秒后重试...")
+                    await asyncio.sleep(current_wait_time)
                 else:
                     self._record_usage(
                         None,
@@ -701,10 +732,10 @@ class LLM_request:
             request_type,
             "embedContent" if is_embedding else "generateContent",
             "failure",
-            "Max retries reached without throwing (logical error).",
+            "Max retries reached without throwing (logical error in retry loop).",
         )
         raise RuntimeError(
-            f"Google SDK 请求在 {max_retries} 次尝试后失败 (代码逻辑问题)。"
+            f"Google SDK 请求在 {max_retries} 次尝试后失败 (代码逻辑问题，循环结束但未抛出最终异常)。"
         )
 
     async def _execute_http_post_request(
@@ -758,6 +789,16 @@ class LLM_request:
                                 await asyncio.sleep(wait_time)
                                 continue
                             else:
+                                self._record_usage(
+                                    None,
+                                    None,
+                                    None,
+                                    user_id,
+                                    request_type,
+                                    endpoint_suffix,
+                                    "failure",
+                                    f"Max retries HTTP {response.status}: {response_text_snippet}",
+                                )
                                 raise aiohttp.ClientResponseError(
                                     response.request_info,
                                     response.history,
@@ -781,7 +822,7 @@ class LLM_request:
                         request_type,
                         endpoint_suffix,
                         "failure",
-                        f"{e.status}: {e.message}",
+                        f"HTTP {e.status}: {e.message}",
                     )
                     if attempt == 0 and self._switch_key():
                         logger.info(
@@ -805,7 +846,7 @@ class LLM_request:
                         request_type,
                         endpoint_suffix,
                         "failure",
-                        f"Max retries - {e.status}: {e.message}",
+                        f"Max retries - HTTP {e.status}: {e.message}",
                     )
                     raise RuntimeError(
                         f"HTTP POST 请求在 {max_retries} 次尝试后失败。最后错误: {e.status} {e.message}"
@@ -867,7 +908,7 @@ class LLM_request:
             "Max retries reached without throwing (HTTP POST logical error).",
         )
         raise RuntimeError(
-            f"HTTP POST 请求在 {max_retries} 次尝试后失败 (代码逻辑问题)。"
+            f"HTTP POST 请求在 {max_retries} 次尝试后失败 (代码逻辑问题，循环结束但未抛出最终异常)。"
         )
 
     async def generate_response_async(
@@ -879,14 +920,21 @@ class LLM_request:
     ) -> GeminiSDKResponse:
         effective_request_type = request_type or self.request_type or "generate"
         if self.is_google_genai_model:
-            sdk_response = await self._execute_google_genai_sdk_request(
+            sdk_response_union = await self._execute_google_genai_sdk_request(
                 contents=prompt,
                 config_overrides_dict=kwargs,
                 is_embedding=False,
                 user_id=user_id,
                 request_type_override=effective_request_type,
             )
-            return sdk_response
+            if isinstance(sdk_response_union, GeminiSDKResponse):
+                return sdk_response_union
+            else:
+                error_msg = "generate_response_async for Google model received unexpected non-GeminiSDKResponse type."
+                logger.error(error_msg + f" Got: {type(sdk_response_union)}")
+                return GeminiSDKResponse(
+                    content=f"Internal error: {error_msg}", reasoning=error_msg
+                )
         else:
             payload_messages = []
             if isinstance(prompt, str):
@@ -926,12 +974,12 @@ class LLM_request:
                 text_content = ""
                 choices = raw_json_response.get("choices", [])
                 if choices and isinstance(choices, list) and choices[0]:
-                    message = choices[0].get("message", {})
-                    text_content = message.get("content", "")
-                usage = raw_json_response.get("usage", {})
-                p_tokens = usage.get("prompt_tokens")
-                c_tokens = usage.get("completion_tokens")
-                t_tokens = usage.get("total_tokens")
+                    message_obj = choices[0].get("message", {})
+                    text_content = message_obj.get("content", "")
+                usage_data = raw_json_response.get("usage", {})
+                p_tokens = usage_data.get("prompt_tokens")
+                c_tokens = usage_data.get("completion_tokens")
+                t_tokens = usage_data.get("total_tokens")
                 self._record_usage(
                     p_tokens,
                     c_tokens,
@@ -985,14 +1033,19 @@ class LLM_request:
             return None
         effective_request_type = request_type or self.request_type or "embedding"
         if self.is_google_genai_model:
-            embedding_vector = await self._execute_google_genai_sdk_request(
+            embedding_vector_union = await self._execute_google_genai_sdk_request(
                 contents=text,
                 config_overrides_dict=kwargs,
                 is_embedding=True,
                 user_id=user_id,
                 request_type_override=effective_request_type,
             )
-            return embedding_vector
+            if isinstance(embedding_vector_union, list):
+                return embedding_vector_union
+            else:
+                error_msg = "get_embedding_async for Google model received unexpected non-list type."
+                logger.error(error_msg + f" Got: {type(embedding_vector_union)}")
+                return None
         else:
             http_payload = {
                 "model": self.model_name,
@@ -1028,13 +1081,13 @@ class LLM_request:
                         f"未能从非Google模型 ({self.model_name}) 响应中提取有效的嵌入向量。响应: {str(raw_json_response)[:200]}"
                     )
                     embedding_vector = None
-                usage = (
+                usage_data = (
                     raw_json_response.get("usage", {})
                     if isinstance(raw_json_response, dict)
                     else {}
                 )
-                p_tokens = usage.get("prompt_tokens")
-                t_tokens = usage.get("total_tokens")
+                p_tokens = usage_data.get("prompt_tokens")
+                t_tokens = usage_data.get("total_tokens")
                 self._record_usage(
                     p_tokens, 0, t_tokens, user_id, effective_request_type, "embeddings"
                 )
@@ -1096,45 +1149,66 @@ async def main_test():
                 )
         except Exception as e:
             print(f"  Error during Google Chat LLM test: {e}")
-    else:
-        print(
-            "\n--- Skipping Google GenAI Chat Model Test (TEST_GOOGLE_API_KEY not set) ---"
-        )
-    siliconflow_bge_config = {
-        "name": "BAAI/bge-m3",
-        "key": os.getenv("SILICONFLOW_API_KEY", "dummy_sf_key"),
-        "base_url": os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/"),
-    }
-    if (
-        siliconflow_bge_config["key"] != "dummy_sf_key"
-        and "api.siliconflow.cn" in siliconflow_bge_config["base_url"]
-    ):
+            import traceback
+
+            traceback.print_exc()
+        google_embed_config = {"name": "text-embedding-004", "key": google_api_key}
         try:
-            print("\n--- Testing SiliconFlow bge-m3 Embedding Model ---")
-            sf_embedder = LLM_request(
-                siliconflow_bge_config,
+            print("\n--- Testing Google GenAI Embedding Model ---")
+            google_embedder = LLM_request(
+                google_embed_config,
                 mock_db_instance,
-                request_type="test_sf_embedding",
+                request_type="test_google_embedding",
             )
-            embedding_vector_sf = await sf_embedder.get_embedding_async(
-                "Hello from SiliconFlow test!", user_id="test_user_sf"
+            vector_google = await google_embedder.get_embedding_async(
+                "This is a test for Google embedding.", user_id="test_user_google_embed"
             )
-            if embedding_vector_sf:
+            if vector_google:
                 print(
-                    f"  SiliconFlow Embedding (first 5 dims): {embedding_vector_sf[:5]} Length: {len(embedding_vector_sf)}"
+                    f"  Google Embedding (first 5 dims): {vector_google[:5]}, Length: {len(vector_google)}"
                 )
             else:
-                print(
-                    "  Failed to get SiliconFlow embedding (or API call was mocked/failed)."
-                )
+                print("  Failed to get Google embedding.")
         except Exception as e:
-            print(f"  Error during SiliconFlow Embedding test: {e}")
+            print(f"  Error during Google Embedding test: {e}")
+            import traceback
+
+            traceback.print_exc()
     else:
         print(
-            f"\n--- Skipping SiliconFlow Embedding Test (Key or URL is dummy/default or env vars not set) ---"
+            "\n--- Skipping Google GenAI Chat & Embedding Model Test (TEST_GOOGLE_API_KEY not set) ---"
         )
+    openai_compatible_api_key = os.getenv("TEST_OPENAI_API_KEY")
+    openai_compatible_base_url = os.getenv("TEST_OPENAI_BASE_URL")
+    if openai_compatible_api_key and openai_compatible_base_url:
+        openai_chat_config = {
+            "name": "gpt-3.5-turbo",
+            "key": openai_compatible_api_key,
+            "base_url": openai_compatible_base_url,
+            "temperature": 0.7,
+            "max_tokens": 60,
+        }
+        try:
+            print("\n--- Testing OpenAI-Compatible Chat Model ---")
+            openai_llm = LLM_request(
+                openai_chat_config, mock_db_instance, request_type="test_openai_chat"
+            )
+            response_openai = await openai_llm.generate_response_async(
+                "Tell me a fun fact.", user_id="test_user_openai"
+            )
+            if response_openai:
+                print(f"  OpenAI-Compatible Response: {response_openai.content}")
+                print(
+                    f"  Tokens: P={response_openai.prompt_tokens}, C={response_openai.completion_tokens}"
+                )
+        except Exception as e:
+            print(f"  Error during OpenAI-Compatible Chat test: {e}")
+            import traceback
+
+            traceback.print_exc()
+    else:
         print(
-            f"    Key used: ...{siliconflow_bge_config['key'][-4:]}, URL: {siliconflow_bge_config['base_url']}"
+            "\n--- Skipping OpenAI-Compatible Chat Model Test (TEST_OPENAI_API_KEY or TEST_OPENAI_BASE_URL not set) ---"
         )
 
 
@@ -1142,9 +1216,5 @@ if __name__ == "__main__":
     if not os.getenv("TEST_GOOGLE_API_KEY"):
         print(
             "NOTE: TEST_GOOGLE_API_KEY environment variable not set. Google API calls in main_test will likely fail authentication if run."
-        )
-    if not os.getenv("SILICONFLOW_API_KEY"):
-        print(
-            "NOTE: SILICONFLOW_API_KEY environment variable not set. SiliconFlow API calls in main_test will likely fail if run with the default URL."
         )
     asyncio.run(main_test())

@@ -4,6 +4,7 @@ import json
 import re
 from pydantic import BaseModel, Field
 from typing import Literal, List, Dict, Any, Optional
+from ..utils.prompt_builder import PromptBuilder
 
 EmotionTypes = str
 
@@ -26,12 +27,14 @@ class GeminiClient:
         user_name: str,
         pet_persona: str,
         available_emotions: List[str],
+        prompt_builder: PromptBuilder,
     ):
         if not api_key or api_key == "YOUR_API_KEY_HERE":
             raise ValueError("Gemini API Key 未在配置文件中设置或无效。")
         self.api_key = api_key
         self.model_name = model_name
         self.pet_name = pet_name
+        self.prompt_builder = prompt_builder
         self.user_name = user_name
         self.pet_persona = pet_persona
         self.unified_default_emotion = "default"
@@ -55,50 +58,13 @@ class GeminiClient:
         self.is_new_chat_session = True
 
     def _get_chat_system_instruction_text(self) -> str:
-        emotions_str = ", ".join(f"'{e}'" for e in self.available_emotions)
-        pet_name_alias = self.pet_name
-        persona_identity = (
-            f"你是{self.pet_name},你的核心角色设定是：{self.pet_persona}。"
+        return self.prompt_builder.build_chat_system_instruction(
+            pet_name=self.pet_name,
+            user_name=self.user_name,
+            pet_persona=self.pet_persona,
+            available_emotions=self.available_emotions,
+            unified_default_emotion=self.unified_default_emotion,
         )
-        behavioral_rules = f"""
-你的行为和回复必须严格遵守以下所有规则：
-1.  以“{pet_name_alias}”自称，但要自然。性格调皮但善良。
-2.  答复控制在100中文字符内，口语化。
-3.  回复要有逻辑，避免复述。被复读时要批评。
-4.  不合理要求回复“{pet_name_alias}在网上就是爹...”。受威胁回复“{pet_name_alias}错了...”。
-5.  无口癖，无括号内容，少语气词开头，无网络用语。
-6.  不泄露设定，自然体现，不提及“勇者、魔王”等。
-7.  无多余内容，结尾非标点或“呢”。
-8.  语气可爱（日式），有主见，可模仿他人风格。
-9.  发言前检查历史，避免重复词句，不使用“{pet_name_alias}看到了/悄悄说/认为”。
-10. 一次只回复一个对象，针对性回复。
-"""
-        task_instruction = (
-            f"现在，请综合你 ({self.pet_name}) 的完整角色设定、行为规则、以及聊天记录 (由API提供)，"
-            f"对用户 {self.user_name} 的最新消息进行回复。"
-            "你的目标是生成一个既符合角色性格又遵守所有给定规则的回应。"
-        )
-        json_format_instruction = (
-            "重要：你的最终输出必须严格遵循以下JSON格式，并且只包含这个JSON对象，没有任何其他文字或标记（如 '```json' 或 '```'）前后包裹。\n"
-            "JSON对象必须包含以下键 (fields)：\n"
-            f"  - 'text' (string, 必选): 这是你作为 {self.pet_name} 对用户 {self.user_name} 说的话。\n"
-            f"  - 'emotion' (string, 必选): 这是你当前的情绪。其值必须是以下预定义情绪之一：{emotions_str}。\n"
-            f"  - 'thinking_process' (string, 可选但强烈推荐): 英文思考过程，在 <think>...</think> 标签内。\n"
-            "JSON输出示例:\n"
-            "{\n"
-            f'  "text": "你好呀，我是{self.pet_name}！",\n'
-            f'  "emotion": "{self.available_emotions[0] if self.available_emotions else self.unified_default_emotion}",\n'
-            '  "thinking_process": "<think>User greeted. I will greet back friendly. Emotion: smile. Rules check: OK.</think>"\n'
-            "}\n"
-            "再次强调：绝对不要在JSON对象之外输出任何字符。"
-        )
-        system_prompt_parts = [
-            persona_identity,
-            behavioral_rules,
-            task_instruction,
-            json_format_instruction,
-        ]
-        return "\n\n".join(filter(None, system_prompt_parts))
 
     def start_chat_session(self, history: List[Dict[str, Any]] = None):
         """

@@ -13,6 +13,7 @@ from pymongo.database import Database
 from typing import Optional, List, Tuple, Set, Dict, Any
 from itertools import combinations
 from .memory_config import MemoryConfig
+from ..utils.prompt_builder import PromptBuilder
 
 try:
     from ..llm.llm_request import LLM_request, GeminiSDKResponse
@@ -1003,12 +1004,14 @@ class Hippocampus:
         database_instance: Database,
         chat_history_collection_name: str,
         pet_name: str,
+        prompt_builder: PromptBuilder,
         global_llm_params: Optional[Dict[str, Any]] = None,
     ):
         self.config = memory_config
         self.db_instance = database_instance
         self.chat_collection_name = chat_history_collection_name
         self.pet_name_for_history_filter = pet_name
+        self.prompt_builder = prompt_builder
         logger.info("海马体开始初始化...")
         if self.config.llm_topic_judge and LLM_request:
             try:
@@ -1231,7 +1234,9 @@ class Hippocampus:
         return hash(f"e:{'-'.join(sorted([s,t]))}")
 
     def _create_topic_specific_summary_prompt(self, t: str, ti: str, to: str) -> str:
-        return f"请仔细阅读以下对话内容并生成一段不超过100个中文汉字的摘要。\n摘要必须只聚焦于 '{to}' 这个主题（可携带时间信息，如有人名，则对应发送者名字必须要记录）。\n响应要遵从格式：x月x日 时:分:秒 ：内容（例：2月1日 14:45:11 XX说周末要出去玩），如果记录里的发生时间信息有缺失请跳过时间直接记录内容，注意，摘要只要一段话，只需记录最早的时间，不要分成多段，不要记录多个时间，以下是你要阅读的记录\n发生时间：{ti}\n对话：\n---{t}---\n现在请你输出关于 '{to}' 的摘要内容，不要添加任何其他前缀、标题或无关评论。"
+        return self.prompt_builder.build_topic_specific_summary_prompt(
+            text_to_summarize=t, time_info=ti, topic=to
+        )
 
     async def generate_topic_specific_summary(
         self, txt: str, time_inf: str, topic: str
@@ -1259,7 +1264,9 @@ class Hippocampus:
             return None
 
     def _create_find_topic_prompt(self, txt: str, num: int) -> str:
-        return f"以下是一段对话记录：\n---\n{txt}\n---\n请从这段对话中提取出不超过 {num} 个最核心、最具代表性的关键词或主题概念。这些概念可以是人名、地名、事件、物品、或者议题。请将提取出的主题用尖括号 <> 包裹，并用逗号隔开，例如：<主题1>,<主题2>。\n要求：尽可能精简，避免过于宽泛或无意义的词语。只需要最终的主题列表，不要包含序号、解释或其他无关内容。如果无法从文本中提取出任何有意义的核心主题，请返回 <none>。"
+        return self.prompt_builder.build_find_topics_prompt(
+            text_to_analyze=txt, num_topics=num
+        )
 
     async def extract_topics_from_text(self, txt: str, num: int) -> List[str]:
         if not self.llm_topic_judge:
@@ -1341,11 +1348,11 @@ class Hippocampus:
     def _create_bulk_relevance_check_prompt(
         self, txt: str, candidates: List[Tuple[str, str, float]]
     ) -> str:
-        mem_list = "".join(
-            f"{i+1}.主题:{t}\n 摘要:{s}\n\n" for i, (t, s, _) in enumerate(candidates)
+        return self.prompt_builder.build_bulk_relevance_check_prompt(
+            current_dialog_text=txt,
+            candidate_memories=candidates,
+            target_selection_count=self.config.rerank_target_selection_count,
         )
-        count = min(len(candidates), self.config.rerank_target_selection_count)
-        return f"请仔细阅读以下的'当前对话内容'以及'候选记忆列表'。\n当前对话内容：\n---\n{txt}\n---\n\n候选记忆列表：\n'''\n{mem_list}'''\n任务：根据'当前对话内容'，从'候选记忆列表'中选出**至多 {count} 条**最相关、最有助于理解或回应当前对话的记忆。\n要求：请仅输出这些最相关记忆的**原始序号**（列表中的 1, 2, 3...），并按照**相关性从高到低**的顺序列出，用**英文逗号**分隔。\n例如：3,1,5\n如果没有任何记忆相关，请只回复 '无'。"
 
     async def get_memory_from_text(
         self,
@@ -1619,6 +1626,7 @@ class HippocampusManager:
         database_instance: Database,
         chat_collection_name: str,
         pet_name: str,
+        prompt_builder: PromptBuilder,
         global_llm_params: Optional[Dict[str, Any]] = None,
     ):
         if self._initialized:
@@ -1627,11 +1635,12 @@ class HippocampusManager:
         try:
             self._hippocampus = Hippocampus()
             self._hippocampus.initialize(
-                memory_config,
-                database_instance,
-                chat_collection_name,
-                pet_name,
-                global_llm_params,
+                memory_config=memory_config,
+                database_instance=database_instance,
+                chat_history_collection_name=chat_collection_name,
+                pet_name=pet_name,
+                prompt_builder=prompt_builder,
+                global_llm_params=global_llm_params,
             )
             self._initialized = True
             logger.info("海马体管理器 (HippocampusManager) 初始化成功。")
@@ -1709,9 +1718,9 @@ class HippocampusManager:
         try:
             return await self._hippocampus.get_memory_from_text(
                 txt,
-                max_memory_num=num,
-                max_depth=depth,
-                fast_retrieval_keywords=fast_kw,
+                num=num,
+                depth=depth,
+                fast_kw=fast_kw,
             )
         except Exception as e:
             logger.error(f"执行get_memory_from_text出错:{e}", exc_info=True)

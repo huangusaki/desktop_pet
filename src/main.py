@@ -5,23 +5,22 @@ current_dir_for_path = os.path.dirname(os.path.abspath(__file__))
 project_root_for_path = os.path.dirname(current_dir_for_path)
 if project_root_for_path not in sys.path:
     sys.path.insert(0, project_root_for_path)
-if current_dir_for_path not in sys.path:
-    sys.path.insert(0, current_dir_for_path)
 import asyncio
 import threading
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 
 try:
-    from utils.config_manager import ConfigManager
-    from llm.gemini_client import GeminiClient
-    from gui.main_window import PetWindow
-    from gui.chat_dialog import ChatDialog
-    from database.mongo_handler import MongoHandler
-    from core.screen_analyzer import ScreenAnalyzer
+    from src.utils.config_manager import ConfigManager
+    from src.utils.prompt_builder import PromptBuilder
+    from src.llm.gemini_client import GeminiClient
+    from src.gui.main_window import PetWindow
+    from src.gui.chat_dialog import ChatDialog
+    from src.database.mongo_handler import MongoHandler
+    from src.core.screen_analyzer import ScreenAnalyzer
 
     print(
-        "DEBUG src/main.py: Successfully imported primary project modules using relative imports."
+        "DEBUG src/main.py: Successfully imported primary project modules using 'src.' prefix."
     )
 except ImportError as e_primary_import:
     print(
@@ -38,26 +37,26 @@ except ImportError as e_primary_import:
         )
     sys.exit(1)
 try:
-    from llm.llm_request import LLM_request
+    from src.llm.llm_request import LLM_request
 
     print(
-        f"DEBUG src/main.py: LLM_request type after relative import: {type(LLM_request)}"
+        f"DEBUG src/main.py: LLM_request type after 'src.' import: {type(LLM_request)}"
     )
 except ImportError as e_llm_req_import:
     print(
-        f"CRITICAL src/main.py: Failed to import LLM_request using relative import: {e_llm_req_import}"
+        f"CRITICAL src/main.py: Failed to import LLM_request using 'src.' import: {e_llm_req_import}"
     )
     LLM_request = None
 try:
-    from memory_system.memory_config import MemoryConfig
-    from memory_system.hippocampus_core import HippocampusManager
+    from src.memory_system.memory_config import MemoryConfig
+    from src.memory_system.hippocampus_core import HippocampusManager
 
     print(
-        "DEBUG src/main.py: Successfully imported MemoryConfig and HippocampusManager using relative imports."
+        "DEBUG src/main.py: Successfully imported MemoryConfig and HippocampusManager using 'src.' prefix."
     )
 except ImportError as e_mem_import:
     print(
-        f"CRITICAL src/main.py: Failed to import memory system modules using relative import: {e_mem_import}"
+        f"CRITICAL src/main.py: Failed to import memory system modules using 'src.' import: {e_mem_import}"
     )
     MemoryConfig = None
     HippocampusManager = None
@@ -71,6 +70,7 @@ from typing import List, Optional, Dict, Any
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 config_manager_global: Optional[ConfigManager] = None
+prompt_builder_global: Optional[PromptBuilder] = None
 gemini_client_global: Optional[GeminiClient] = None
 pet_window_global: Optional[PetWindow] = None
 chat_dialog_global: Optional[ChatDialog] = None
@@ -365,13 +365,16 @@ def setup_environment_and_config() -> bool:
 
 
 async def initialize_async_services():
-    global config_manager_global, gemini_client_global, mongo_handler_global, hippocampus_manager_global
+    global config_manager_global, prompt_builder_global, gemini_client_global, mongo_handler_global, hippocampus_manager_global
     global available_emotions_global
     if not config_manager_global:
         print(
             "CRITICAL: ConfigManager not initialized before initialize_async_services."
         )
         return False
+    if prompt_builder_global is None and config_manager_global:
+        prompt_builder_global = PromptBuilder(config_manager_global)
+        print("DEBUG: PromptBuilder 全局实例已初始化。")
     mongo_ok = False
     try:
         conn_str = config_manager_global.get_mongo_connection_string()
@@ -427,12 +430,18 @@ async def initialize_async_services():
             )
             print("CRITICAL ERROR: Gemini API Key missing or placeholder.")
         else:
+            if not prompt_builder_global:
+                print(
+                    "CRITICAL ERROR: PromptBuilder not initialized before GeminiClient."
+                )
+                return False
             gemini_client_global = GeminiClient(
                 api_key=chat_api_key,
                 model_name=chat_model_name,
                 pet_name=pet_name,
                 user_name=user_name,
                 pet_persona=pet_persona,
+                prompt_builder=prompt_builder_global,
                 available_emotions=available_emotions_global,
             )
             print("主聊天 Gemini客户端初始化成功。")
@@ -466,6 +475,11 @@ async def initialize_async_services():
             print(
                 f"DEBUG: HippocampusManager instance obtained: {hippocampus_manager_global is not None}"
             )
+            if not prompt_builder_global:
+                print(
+                    "CRITICAL ERROR: PromptBuilder not initialized before HippocampusManager."
+                )
+                return False
             print(
                 "DEBUG: Attempting hippocampus_manager_global.initialize_singleton..."
             )
@@ -475,6 +489,7 @@ async def initialize_async_services():
                 chat_collection_name=config_manager_global.get_mongo_collection_name(),
                 pet_name=pet_name_for_hippocampus,
                 global_llm_params=memory_global_llm_params,
+                prompt_builder=prompt_builder_global,
             )
             print("DEBUG: initialize_singleton completed.")
             print("记忆系统 (HippocampusManager) 初始化成功。")
@@ -716,12 +731,14 @@ if __name__ == "__main__":
     if (
         gemini_client_global
         and config_manager_global
+        and prompt_builder_global
         and pet_window_global
         and config_manager_global.get_screen_analysis_enabled()
     ):
         user_name_for_analyzer = config_manager_global.get_user_name()
         screen_analyzer_global = ScreenAnalyzer(
             gemini_client=gemini_client_global,
+            prompt_builder=prompt_builder_global,
             config_manager=config_manager_global,
             pet_window=pet_window_global,
             pet_name=config_manager_global.get_pet_name(),
