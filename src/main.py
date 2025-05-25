@@ -4,6 +4,7 @@ import asyncio
 import threading
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
 from src.utils.config_manager import ConfigManager
 from src.utils.prompt_builder import PromptBuilder
 from src.llm.gemini_client import GeminiClient
@@ -465,6 +466,9 @@ def open_chat_dialog_handler():
     global chat_dialog_global, gemini_client_global, pet_window_global, mongo_handler_global
     global config_manager_global, pet_avatar_path_global, user_avatar_path_global, hippocampus_manager_global
     if chat_dialog_global is None:
+        if not pet_window_global:
+            QMessageBox.warning(None, "错误", "宠物窗口尚未初始化。")
+            return
         if not gemini_client_global:
             QMessageBox.warning(None, "服务未就绪", "Gemini 服务尚未初始化。")
             return
@@ -500,6 +504,61 @@ def open_chat_dialog_handler():
             )
     if chat_dialog_global:
         if chat_dialog_global.isHidden():
+            if pet_window_global:
+                pet_rect = pet_window_global.geometry()
+                chat_dialog_global.adjustSize()
+                chat_dialog_size = chat_dialog_global.size()
+                screen = QGuiApplication.screenAt(pet_window_global.pos())
+                if not screen:
+                    screen = QGuiApplication.primaryScreen()
+                screen_available_rect = screen.availableGeometry()
+                target_x_left = pet_rect.x() - chat_dialog_size.width()
+                target_y = pet_rect.y()
+                if target_y < screen_available_rect.y():
+                    target_y = screen_available_rect.y()
+                if (
+                    target_y + chat_dialog_size.height()
+                    > screen_available_rect.bottom()
+                ):
+                    target_y = (
+                        screen_available_rect.bottom() - chat_dialog_size.height()
+                    )
+                    if target_y < screen_available_rect.y():
+                        target_y = screen_available_rect.y()
+                if target_x_left >= screen_available_rect.x():
+                    chat_dialog_global.move(target_x_left, target_y)
+                else:
+                    target_x_right = pet_rect.x() + pet_rect.width()
+                    if (
+                        target_x_right + chat_dialog_size.width()
+                        <= screen_available_rect.right()
+                    ):
+                        chat_dialog_global.move(target_x_right, target_y)
+                    else:
+                        if target_x_left < screen_available_rect.x() and (
+                            target_x_right + chat_dialog_size.width()
+                            > screen_available_rect.right()
+                        ):
+                            clamped_x = max(screen_available_rect.x(), target_x_left)
+                            chat_dialog_global.move(clamped_x, target_y)
+                        elif target_x_left < screen_available_rect.x():
+                            chat_dialog_global.move(target_x_right, target_y)
+                        else:
+                            clamped_x_right = min(
+                                target_x_right,
+                                screen_available_rect.right()
+                                - chat_dialog_size.width(),
+                            )
+                            if (
+                                target_x_right + chat_dialog_size.width()
+                                > screen_available_rect.right()
+                            ):
+                                chat_dialog_global.move(
+                                    max(screen_available_rect.x(), target_x_left),
+                                    target_y,
+                                )
+                            else:
+                                chat_dialog_global.move(target_x_right, target_y)
             try:
                 chat_dialog_global.open_dialog()
             except Exception as e:

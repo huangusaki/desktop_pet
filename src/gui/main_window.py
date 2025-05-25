@@ -35,26 +35,26 @@ class PetWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        self.image_label = QLabel(self)
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.image_label)
         self.speech_bubble_label = QLabel(self)
         self.speech_bubble_label.setWordWrap(True)
         self.speech_bubble_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.speech_bubble_label.setStyleSheet(
             "QLabel {"
-            "  background-color: rgba(240, 240, 240, 220);"
+            "  background-color: rgba(240, 240, 240, 110);"
             "  color: black;"
             "  padding: 8px;"
             "  border-radius: 10px;"
             "  margin-left: 5px;"
             "  margin-right: 5px;"
-            "  margin-bottom: 5px;"
+            "  margin-top: -2px;"
             "}"
         )
         self.speech_bubble_label.setText("")
         self.speech_bubble_label.setVisible(False)
         layout.addWidget(self.speech_bubble_label)
+        self.image_label = QLabel(self)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.image_label)
         self.set_emotion(
             self.current_emotion, initial_image_path_override=initial_image_path
         )
@@ -80,7 +80,7 @@ class PetWindow(QWidget):
             new_x = available_geometry.right() - self.width()
             new_y = available_geometry.bottom() - self.height()
             new_x = max(available_geometry.left(), new_x)
-            new_y = max(available_geometry.top(), new_y) + 6
+            new_y = max(available_geometry.top(), new_y) + 1
             self.move(new_x, new_y)
         except Exception as e:
             print(f"PetWindow: 自动对齐时出错: {e}. 使用默认定位。")
@@ -176,13 +176,25 @@ class PetWindow(QWidget):
             return
 
     def set_speech_text(self, text: str):
-        if text and text.strip():
-            self.speech_bubble_label.setText(text.strip())
-            self.speech_bubble_label.setVisible(True)
+        old_y = 0
+        old_height = 0
+        if self.isVisible():
+            old_y = self.y()
+            old_height = self.height()
+        text_strip = text.strip() if text else ""
+        if text_strip:
+            self.speech_bubble_label.setText(text_strip)
+            if not self.speech_bubble_label.isVisible():
+                self.speech_bubble_label.setVisible(True)
         else:
-            self.speech_bubble_label.setText("")
-            self.speech_bubble_label.setVisible(False)
+            if self.speech_bubble_label.isVisible():
+                self.speech_bubble_label.setVisible(False)
         self.adjustSize()
+        if self.isVisible() and old_height > 0:
+            new_height = self.height()
+            height_change = new_height - old_height
+            if height_change != 0:
+                self.move(self.x(), old_y - height_change)
 
     def _perform_initial_alignment(self):
         """Helper method to perform and flag initial alignment."""

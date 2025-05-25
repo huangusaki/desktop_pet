@@ -409,7 +409,7 @@ class ChatDialog(QDialog):
             text_html = f'<div style="color:white; {text_block_common_style}">{escaped_message}</div>'
             formatted_message = f"""
             <div style="text-align: right; margin-bottom:10px;">
-                <table cellpadding="5" cellspacing="5" border="5" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
+                <table cellpadding="5" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
                   <tr>
                     <td style="vertical-align:top; padding-right:10px;">{text_html}</td>
                     <td style="width:{current_display_size}px; vertical-align:top;">{avatar_img_html}</td>
@@ -420,7 +420,7 @@ class ChatDialog(QDialog):
             text_html = f'<div style="color:#e0e0e0; {text_block_common_style}">{escaped_message}</div>'
             formatted_message = f"""
             <div style="text-align: left; margin-bottom:10px;">
-                <table cellpadding="5" cellspacing="5" border="5" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
+                <table cellpadding="5" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
                   <tr>
                     <td style="width:{current_display_size}px; vertical-align:top; padding-right:10px;">{avatar_img_html}</td>
                     <td style="vertical-align:top;">{text_html}</td>
@@ -445,11 +445,12 @@ class ChatDialog(QDialog):
         history_for_display = self._get_raw_chat_history_for_display()
         if history_for_display:
             for msg_data in history_for_display:
-                is_user_msg = msg_data.get("sender", "").lower() == "user"
+                sender_from_db = msg_data.get("sender", "")
+                is_user_msg = sender_from_db == self.user_name
                 self._add_message_to_display(
-                    self.user_name if is_user_msg else self.pet_name,
-                    msg_data.get("message_text", ""),
-                    is_user_msg,
+                    sender_name_for_log_only=sender_from_db,
+                    message=msg_data.get("message_text", ""),
+                    is_user=is_user_msg,
                 )
         else:
             no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
