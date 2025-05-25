@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 import json
 import re
 from pydantic import BaseModel, Field
@@ -80,6 +81,10 @@ class GeminiClient:
             self.client = genai.Client(api_key=self.api_key)
         except Exception as e:
             raise ConnectionError(f"无法初始化 genai.Client(). 原始错误: {e}")
+        self.enabled_tools = []
+        self.enabled_tools.append(Tool(url_context=types.UrlContext))
+        self.enabled_tools.append(Tool(google_search=types.GoogleSearch))
+        self.enabled_tools.append(Tool(code_execution=types.ToolCodeExecution))
 
     def _build_chat_contents_for_api(self, new_user_message_text: str) -> List[str]:
         """
@@ -116,11 +121,7 @@ class GeminiClient:
                     "emotion": self.unified_default_emotion,
                     "thinking_process": f"<think>Error: {error_msg}</think>",
                 }
-            generation_config_args = {
-                "response_mime_type": "application/json",
-                "response_schema": PetResponseSchema,
-                "temperature": 0.75,
-            }
+            generation_config_args = {"temperature": 0.75, "tools": self.enabled_tools}
             api_config = types.GenerateContentConfig(**generation_config_args)
             response_object = self.client.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
@@ -187,6 +188,7 @@ class GeminiClient:
                     response_object, "Chat (Unified String Mode)"
                 )
         except Exception as e:
+            print(f"严重错误:{e}")
             return self._handle_general_exception(
                 e, "send_message (Unified String Mode)", response_object
             )
@@ -239,11 +241,7 @@ class GeminiClient:
                         log_str += f"    Part {j} (inline_data): mime_type='{part_item.inline_data.mime_type}', data_length={len(part_item.inline_data.data)}\n"
             print(log_str.strip())
             print(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
-            vision_config_args = {
-                "response_mime_type": "application/json",
-                "response_schema": PetResponseSchema,
-                "temperature": 0.25,
-            }
+            vision_config_args = {"temperature": 0.80, "tools": self.enabled_tools}
             api_vision_config = types.GenerateContentConfig(**vision_config_args)
             response_object = self.client.models.generate_content(
                 model=self.model_name,

@@ -124,6 +124,36 @@ class ConfigManager:
     def get_screen_analysis_chance(self) -> float:
         return self.config.getfloat("SCREEN_ANALYSIS", "CHANCE", fallback=0.1)
 
+    def get_tts_enabled(self) -> bool:
+        return self.config.getboolean("TTS", "ENABLED", fallback=False)
+
+    def get_tts_api_base_url(self) -> str:
+        return self.config.get("TTS", "API_BASE_URL", fallback="http://127.0.0.1:9880/")
+
+    def get_tts_api_endpoint(self) -> str:
+        return self.config.get("TTS", "API_ENDPOINT", fallback="tts")
+
+    def get_tts_refer_wav_path(self) -> str:
+        return self.config.get("TTS", "REFER_WAV_PATH", fallback="refer.wav")
+
+    def get_tts_prompt_text(self) -> str:
+        return self.config.get("TTS", "PROMPT_TEXT", fallback="")
+
+    def get_tts_prompt_language(self) -> str:
+        return self.config.get("TTS", "PROMPT_LANGUAGE", fallback="zh")
+
+    def get_tts_text_language(self) -> str:
+        return self.config.get("TTS", "TEXT_LANGUAGE", fallback="zh")
+
+    def get_tts_cut_punc_method(self) -> str:
+        return self.config.get("TTS", "CUT_PUNC_METHOD", fallback="cut5")
+
+    def get_tts_media_type(self, fallback="wav") -> str:
+        return self.config.get("TTS", "MEDIA_TYPE", fallback=fallback)
+
+    def get_tts_play_audio_timeout_seconds(self) -> int:
+        return self.config.getint("TTS", "PLAY_AUDIO_TIMEOUT_SECONDS", fallback=45)
+
     def get_screen_analysis_prompt(self) -> str:
         default_prompt = (
             "你是{pet_name}，一个可爱的桌面宠物。这张图片是用户当前的屏幕截图。\n"
