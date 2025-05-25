@@ -36,8 +36,8 @@ EmotionTypes = str
 
 
 class PetResponseSchema(BaseModel):
-    text: str = Field(..., description="宠物说的话")
-    emotion: EmotionTypes = Field(..., description="宠物当前的情绪")
+    text: str = Field(..., description="Bot说的话")
+    emotion: EmotionTypes = Field(..., description="Bot当前的情绪")
     thinking_process: Optional[str] = Field(
         None,
         description='模型的思考过程，使用英文，在<think>和</think>标签之间。例如: "<think>User said X...</think>"',

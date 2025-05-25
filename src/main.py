@@ -225,7 +225,7 @@ def setup_environment_and_config() -> bool:
                     "[GEMINI]\nAPI_KEY = YOUR_API_KEY_HERE\nMODEL_NAME = gemini-1.5-flash-latest\nHTTP_PROXY =\nHTTPS_PROXY =\n\n"
                 )
                 cf.write(
-                    "[PET]\nINITIAL_IMAGE_FILENAME = default.png\nNAME = 小助手\nPERSONA = 你是一个友好、乐于助人的桌面宠物...\n\n"
+                    "[PET]\nINITIAL_IMAGE_FILENAME = default.png\nNAME = 小助手\nPERSONA = 你是一个友好、乐于助人的桌面Bot...\n\n"
                 )
                 cf.write("[USER]\nNAME = 主人\n\n")
                 cf.write(
@@ -284,7 +284,7 @@ def setup_environment_and_config() -> bool:
         assets_path_global, initial_image_filename
     )
     if not os.path.exists(initial_pet_image_abs_path):
-        print(f"警告：初始宠物图片 {initial_pet_image_abs_path} 不存在。创建占位图。")
+        print(f"警告：初始Bot图片 {initial_pet_image_abs_path} 不存在。创建占位图。")
         create_placeholder_avatar(initial_pet_image_abs_path, "Pet", size=(120, 120))
         if (
             initial_image_filename.lower() == "default.png"
@@ -467,7 +467,7 @@ def open_chat_dialog_handler():
     global config_manager_global, pet_avatar_path_global, user_avatar_path_global, hippocampus_manager_global
     if chat_dialog_global is None:
         if not pet_window_global:
-            QMessageBox.warning(None, "错误", "宠物窗口尚未初始化。")
+            QMessageBox.warning(None, "错误", "Bot窗口尚未初始化。")
             return
         if not gemini_client_global:
             QMessageBox.warning(None, "服务未就绪", "Gemini 服务尚未初始化。")
@@ -580,7 +580,7 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         pet_window_global.update_speech_and_emotion(text, emotion)
     if chat_dialog_global and not chat_dialog_global.isHidden():
         pet_name = (
-            config_manager_global.get_pet_name() if config_manager_global else "宠物"
+            config_manager_global.get_pet_name() if config_manager_global else "Bot"
         )
         display_text = f"（看了一眼屏幕）{text}"
         chat_dialog_global._add_message_to_display(

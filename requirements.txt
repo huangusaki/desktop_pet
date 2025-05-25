@@ -1,0 +1,10 @@
+PyQt6
+aiohttp
+Pillow
+pymongo
+google-generativeai
+networkx
+numpy
+pydantic
+jieba
+google-genai

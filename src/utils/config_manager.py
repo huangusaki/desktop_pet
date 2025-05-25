@@ -70,7 +70,7 @@ class ConfigManager:
 
     def get_pet_persona(self):
         return self.config.get(
-            "PET", "PERSONA", fallback="你是一个友好、乐于助人的桌面宠物。"
+            "PET", "PERSONA", fallback="你是一个友好、乐于助人的桌面Bot。"
         )
 
     def get_avatar_base_path_relative(self):
@@ -156,9 +156,9 @@ class ConfigManager:
 
     def get_screen_analysis_prompt(self) -> str:
         default_prompt = (
-            "你是{pet_name}，一个可爱的桌面宠物。这张图片是用户当前的屏幕截图。\n"
+            "你是{pet_name}，一个可爱的桌面Bot。这张图片是用户当前的屏幕截图。\n"
             "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n"
-            "你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
+            "你的回复必须是一个JSON对象，包含 'text' (你作为Bot说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
         )
         return self.config.get(
             "SCREEN_ANALYSIS", "PROMPT", fallback=default_prompt
