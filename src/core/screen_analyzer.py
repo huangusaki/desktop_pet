@@ -210,21 +210,25 @@ class ScreenAnalyzer(QObject):
 
     @pyqtSlot()
     def _handle_hide_request(self):
-        print("ScreenAnalyzer: Hiding pet window for screenshot.")
+        print("ScreenAnalyzer: Making pet window transparent for screenshot.")
         if self.pet_window:
             self._pet_was_visible_before_grab = self.pet_window.isVisible()
             if self._pet_was_visible_before_grab:
-                self.pet_window.hide()
+                self.pet_window.setWindowOpacity(0.01)
                 QApplication.processEvents()
         self.ready_for_worker_grab.emit()
 
     @pyqtSlot()
     def _handle_show_request(self):
-        """Slot to show the pet window. Runs in main thread."""
-        print("ScreenAnalyzer: Showing pet window after screenshot.")
-        if self.pet_window and self._pet_was_visible_before_grab:
-            self.pet_window.show()
-            QApplication.processEvents()
+        print("ScreenAnalyzer: Restoring pet window opacity after screenshot.")
+        if self.pet_window:
+            if self._pet_was_visible_before_grab:
+                self.pet_window.setWindowOpacity(1.0)
+                if not self.pet_window.isVisible():
+                    self.pet_window.show()
+                self.pet_window.activateWindow()
+                self.pet_window.raise_()
+                QApplication.processEvents()
 
     @pyqtSlot(dict)
     def _handle_llm_response(self, response_data: dict):

@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication, QMenu
 from PyQt6.QtGui import QPixmap, QMouseEvent, QGuiApplication, QAction, QActionGroup
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QTimer
 import os
 from typing import List
 
@@ -68,8 +68,6 @@ class PetWindow(QWidget):
             self.speech_bubble_label.setText("")
             self.speech_bubble_label.setVisible(False)
         self.resize(180, 120)
-        if self.isVisible():
-            self._auto_align_to_taskbar_right()
 
     def _auto_align_to_taskbar_right(self):
         try:
@@ -82,7 +80,7 @@ class PetWindow(QWidget):
             new_x = available_geometry.right() - self.width()
             new_y = available_geometry.bottom() - self.height()
             new_x = max(available_geometry.left(), new_x)
-            new_y = max(available_geometry.top(), new_y)
+            new_y = max(available_geometry.top(), new_y) + 6
             self.move(new_x, new_y)
         except Exception as e:
             print(f"PetWindow: 自动对齐时出错: {e}. 使用默认定位。")
@@ -176,8 +174,6 @@ class PetWindow(QWidget):
         else:
             self._set_error_text(f"图片丢失\nEm: {self.current_emotion}")
             return
-        if self.isVisible():
-            self._auto_align_to_taskbar_right()
 
     def set_speech_text(self, text: str):
         if text and text.strip():
@@ -187,14 +183,17 @@ class PetWindow(QWidget):
             self.speech_bubble_label.setText("")
             self.speech_bubble_label.setVisible(False)
         self.adjustSize()
-        if self.isVisible():
+
+    def _perform_initial_alignment(self):
+        """Helper method to perform and flag initial alignment."""
+        if not self._initial_pos_set:
             self._auto_align_to_taskbar_right()
+            self._initial_pos_set = True
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._initial_pos_set:
-            self._auto_align_to_taskbar_right()
-            self._initial_pos_set = True
+            QTimer.singleShot(0, self._perform_initial_alignment)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
