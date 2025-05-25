@@ -141,7 +141,7 @@ class PromptBuilder:
                 f"构建屏幕分析Prompt时出错：模板中缺少键 {e}。原始模板：'{raw_template}'"
             )
             safe_template = (
-                f"你是{pet_name}，一个可爱的桌面宠物。这张图片是用户当前的屏幕截图。\n"
+                f"你是{pet_name}，这张图片是用户当前的屏幕截图。\n"
                 "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n"
                 f"你的回复必须是一个JSON对象，包含 'text' (你作为宠物说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
             )

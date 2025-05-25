@@ -1,70 +1,20 @@
 import sys
 import os
-
-current_dir_for_path = os.path.dirname(os.path.abspath(__file__))
-project_root_for_path = os.path.dirname(current_dir_for_path)
-if project_root_for_path not in sys.path:
-    sys.path.insert(0, project_root_for_path)
 import asyncio
 import threading
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
-
-try:
-    from src.utils.config_manager import ConfigManager
-    from src.utils.prompt_builder import PromptBuilder
-    from src.llm.gemini_client import GeminiClient
-    from src.gui.main_window import PetWindow
-    from src.gui.chat_dialog import ChatDialog
-    from src.database.mongo_handler import MongoHandler
-    from src.core.screen_analyzer import ScreenAnalyzer
-
-    print(
-        "DEBUG src/main.py: Successfully imported primary project modules using 'src.' prefix."
-    )
-except ImportError as e_primary_import:
-    print(
-        f"CRITICAL src/main.py: Failed to import primary project modules: {e_primary_import}"
-    )
-    if QApplication.instance() is None:
-        _app_temp = QApplication(sys.argv)
-        QMessageBox.critical(
-            None, "模块导入错误", f"无法导入核心模块: {e_primary_import}\n程序将退出。"
-        )
-    else:
-        QMessageBox.critical(
-            None, "模块导入错误", f"无法导入核心模块: {e_primary_import}\n程序将退出。"
-        )
-    sys.exit(1)
-try:
-    from src.llm.llm_request import LLM_request
-
-    print(
-        f"DEBUG src/main.py: LLM_request type after 'src.' import: {type(LLM_request)}"
-    )
-except ImportError as e_llm_req_import:
-    print(
-        f"CRITICAL src/main.py: Failed to import LLM_request using 'src.' import: {e_llm_req_import}"
-    )
-    LLM_request = None
-try:
-    from src.memory_system.memory_config import MemoryConfig
-    from src.memory_system.hippocampus_core import HippocampusManager
-
-    print(
-        "DEBUG src/main.py: Successfully imported MemoryConfig and HippocampusManager using 'src.' prefix."
-    )
-except ImportError as e_mem_import:
-    print(
-        f"CRITICAL src/main.py: Failed to import memory system modules using 'src.' import: {e_mem_import}"
-    )
-    MemoryConfig = None
-    HippocampusManager = None
-try:
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    Image, ImageDraw, ImageFont = None, None, None
-    print("CRITICAL: Pillow library not found...")
+from src.utils.config_manager import ConfigManager
+from src.utils.prompt_builder import PromptBuilder
+from src.llm.gemini_client import GeminiClient
+from src.gui.main_window import PetWindow
+from src.gui.chat_dialog import ChatDialog
+from src.database.mongo_handler import MongoHandler
+from src.core.screen_analyzer import ScreenAnalyzer
+from src.llm.llm_request import LLM_request
+from src.memory_system.memory_config import MemoryConfig
+from src.memory_system.hippocampus_core import HippocampusManager
+from PIL import Image, ImageDraw, ImageFont
 from typing import List, Optional, Dict, Any
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -105,12 +55,6 @@ class AsyncioHelper:
             )
             AsyncioHelper._thread.start()
             AsyncioHelper._is_running_event.wait(timeout=5)
-            if AsyncioHelper._loop.is_running():
-                print("DEBUG Main: Asyncio event loop started in a separate thread.")
-            else:
-                print("ERROR Main: Failed to start asyncio event loop in thread.")
-        else:
-            print("DEBUG Main: Asyncio event loop already running.")
 
     @staticmethod
     def _run_loop():
@@ -130,12 +74,10 @@ class AsyncioHelper:
                     AsyncioHelper._loop.shutdown_asyncgens()
                 )
             AsyncioHelper._loop.close()
-            print("DEBUG Main: Asyncio event loop in thread has finished and closed.")
 
     @staticmethod
     def stop_asyncio_loop():
         if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
-            print("DEBUG Main: Requesting asyncio event loop to stop.")
             tasks = asyncio.all_tasks(loop=AsyncioHelper._loop)
             if tasks:
 
@@ -158,7 +100,6 @@ class AsyncioHelper:
             else:
                 AsyncioHelper._loop.call_soon_threadsafe(AsyncioHelper._loop.stop)
         if AsyncioHelper._thread and AsyncioHelper._thread.is_alive():
-            print("DEBUG Main: Waiting for asyncio thread to join...")
             AsyncioHelper._thread.join(timeout=5)
             if AsyncioHelper._thread.is_alive():
                 print(
@@ -167,7 +108,6 @@ class AsyncioHelper:
         AsyncioHelper._loop = None
         AsyncioHelper._thread = None
         AsyncioHelper._is_running_event = None
-        print("DEBUG Main: Asyncio loop cleanup complete.")
 
     @staticmethod
     def schedule_task(coro) -> Optional[asyncio.Future]:
@@ -385,18 +325,15 @@ async def initialize_async_services():
         return False
     if prompt_builder_global is None and config_manager_global:
         prompt_builder_global = PromptBuilder(config_manager_global)
-        print("DEBUG: PromptBuilder 全局实例已初始化。")
     mongo_ok = False
     try:
         conn_str = config_manager_global.get_mongo_connection_string()
         db_name = config_manager_global.get_mongo_database_name()
         coll_name = config_manager_global.get_mongo_collection_name()
-        print("DEBUG: Initializing MongoHandler...")
         mongo_handler_global = MongoHandler(conn_str, db_name, coll_name)
         if mongo_handler_global.is_connected() and (
             mongo_handler_global.get_database() is not None
         ):
-            print("MongoDB Handler 初始化并连接成功。")
             mongo_ok = True
         else:
             QMessageBox.warning(
@@ -462,7 +399,6 @@ async def initialize_async_services():
                 mongo_handler=mongo_handler_global,
                 config_manager=config_manager_global,
             )
-            print("主聊天 Gemini客户端初始化成功。")
             gemini_ok = True
     except Exception as e:
         QMessageBox.critical(None, "Gemini客户端初始化错误", f"错误: {e}")
@@ -483,27 +419,14 @@ async def initialize_async_services():
         )
     elif mongo_handler_global and (mongo_handler_global.get_database() is not None):
         try:
-            print("DEBUG: Attempting MemoryConfig.from_config_manager...")
             mem_config = MemoryConfig.from_config_manager(config_manager_global)
-            print(f"DEBUG: MemoryConfig loaded: {mem_config is not None}")
             memory_global_llm_params: Optional[Dict[str, Any]] = None
             pet_name_for_hippocampus = config_manager_global.get_pet_name()
-            print("DEBUG: Attempting HippocampusManager.get_instance()...")
             hippocampus_manager_global = await HippocampusManager.get_instance()
-            print(
-                f"DEBUG: HippocampusManager instance obtained: {hippocampus_manager_global is not None}"
-            )
             if not prompt_builder_global:
-                print(
-                    "CRITICAL ERROR: PromptBuilder not initialized before HippocampusManager."
-                )
                 return False
             if not hippocampus_manager_global:
-                print("ERROR: HippocampusManager.get_instance() returned None.")
                 return False
-            print(
-                "DEBUG: Attempting hippocampus_manager_global.initialize_singleton..."
-            )
             await hippocampus_manager_global.initialize_singleton(
                 memory_config=mem_config,
                 database_instance=mongo_handler_global.get_database(),
@@ -512,7 +435,6 @@ async def initialize_async_services():
                 global_llm_params=memory_global_llm_params,
                 prompt_builder=prompt_builder_global,
             )
-            print("DEBUG: initialize_singleton completed.")
             print("记忆系统 (HippocampusManager) 初始化成功。")
         except Exception as e:
             QMessageBox.warning(
@@ -611,7 +533,7 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
             if config_manager_global
             else "DefaultPet"
         )
-        db_text = f"（看了一眼屏幕）{text}"
+        db_text = f"{text}"
         mongo_handler_global.insert_chat_message(
             sender=config_manager_global.get_pet_name(),
             message_text=db_text,
@@ -727,9 +649,6 @@ if __name__ == "__main__":
         sys.exit(1)
     initialization_succeeded = False
     if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
-        print(
-            "DEBUG Main: Scheduling initialize_async_services directly in AsyncioHelper's loop."
-        )
 
         async def do_initialization():
             try:
@@ -747,9 +666,6 @@ if __name__ == "__main__":
         if init_future_concurrent:
             try:
                 initialization_succeeded = init_future_concurrent.result(timeout=60)
-                print(
-                    f"DEBUG Main: initialize_async_services completed. Result: {initialization_succeeded}"
-                )
             except asyncio.TimeoutError:
                 print(
                     "CRITICAL ERROR: initialize_async_services timed out after 60 seconds."
@@ -808,7 +724,6 @@ if __name__ == "__main__":
             handle_screen_analysis_reaction
         )
         screen_analyzer_global.start_monitoring()
-        print("DEBUG Main: Screen analyzer configured and monitoring started.")
     else:
         print(
             "INFO Main: Screen analyzer not started (disabled or dependencies missing)."

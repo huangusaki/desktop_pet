@@ -197,16 +197,12 @@ class PetWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
-            print("PetWindow: DEBUG - mouseDoubleClickEvent triggered")
             self.request_open_chat_dialog.emit()
         super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
         modifiers = QApplication.keyboardModifiers()
         if event.button() == Qt.MouseButton.LeftButton:
-            print(
-                f"PetWindow: DEBUG - mousePressEvent (Button: Left, Alt: {modifiers == Qt.KeyboardModifier.AltModifier})"
-            )
             if modifiers == Qt.KeyboardModifier.AltModifier:
                 self._drag_pos = (
                     event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -231,9 +227,6 @@ class PetWindow(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
-            print(
-                f"PetWindow: DEBUG - mouseReleaseEvent (Button: Left, Dragging: {self._is_dragging})"
-            )
             was_dragging = hasattr(self, "_is_dragging") and self._is_dragging
             if was_dragging:
                 self._is_dragging = False

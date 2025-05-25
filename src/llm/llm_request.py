@@ -10,25 +10,15 @@ import aiohttp
 import os
 from google import genai
 from google.genai import types as google_genai_types
-
-try:
-    from google.api_core import exceptions as google_api_core_exceptions
-
-    ResourceExhaustedException = google_api_core_exceptions.ResourceExhausted
-    InvalidArgumentException = google_api_core_exceptions.InvalidArgument
-    PermissionDeniedException = google_api_core_exceptions.PermissionDenied
-    InternalServerErrorException = google_api_core_exceptions.InternalServerError
-    ServiceUnavailableException = google_api_core_exceptions.ServiceUnavailable
-except ImportError:
-    ResourceExhaustedException = None
-    InvalidArgumentException = None
-    PermissionDeniedException = None
-    InternalServerErrorException = None
-    ServiceUnavailableException = None
 from pymongo.database import Database
 import logging
 import random
 
+ResourceExhaustedException = None
+InvalidArgumentException = None
+PermissionDeniedException = None
+InternalServerErrorException = None
+ServiceUnavailableException = None
 logger = logging.getLogger("llm_request")
 if not logger.hasHandlers():
     logging.basicConfig(
@@ -1210,11 +1200,3 @@ async def main_test():
         print(
             "\n--- Skipping OpenAI-Compatible Chat Model Test (TEST_OPENAI_API_KEY or TEST_OPENAI_BASE_URL not set) ---"
         )
-
-
-if __name__ == "__main__":
-    if not os.getenv("TEST_GOOGLE_API_KEY"):
-        print(
-            "NOTE: TEST_GOOGLE_API_KEY environment variable not set. Google API calls in main_test will likely fail authentication if run."
-        )
-    asyncio.run(main_test())
