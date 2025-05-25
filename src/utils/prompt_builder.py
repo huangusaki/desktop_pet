@@ -1,9 +1,18 @@
 from typing import List, Dict, Any, Tuple, Optional
 
-try:
-    from .config_manager import ConfigManager
-except ImportError:
-    from utils.config_manager import ConfigManager
+
+class ConfigManager:
+    def get_history_count_for_prompt(self):
+        return 10
+
+    def get_user_name(self):
+        return "User"
+
+    def get_pet_name(self):
+        return "Pet"
+
+    def get_screen_analysis_prompt(self):
+        return "分析这张关于{user_name}屏幕的图片，作为{pet_name}，你的情绪可以是{available_emotions_str}，回复必须是JSON。"
 
 
 class PromptBuilder:
@@ -20,7 +29,6 @@ class PromptBuilder:
     ) -> str:
         """
         构建聊天机器人的系统指令。
-        对应原 GeminiClient._get_chat_system_instruction_text()
         """
         emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         user = user_name
@@ -59,6 +67,77 @@ class PromptBuilder:
         ]
         return "\n\n".join(filter(None, system_prompt_parts))
 
+    def build_unified_chat_prompt_string(
+        self,
+        new_user_message_text: str,
+        pet_name: str,
+        user_name: str,
+        pet_persona: str,
+        available_emotions: List[str],
+        unified_default_emotion: str,
+        mongo_handler: Any,
+    ) -> str:
+        """
+        构建一个包含系统指令、格式化历史对话和新用户消息的单一字符串。
+        """
+        system_and_format_instructions = self.build_chat_system_instruction(
+            pet_name=pet_name,
+            user_name=user_name,
+            pet_persona=pet_persona,
+            available_emotions=available_emotions,
+            unified_default_emotion=unified_default_emotion,
+        )
+        full_prompt_parts = [system_and_format_instructions]
+        full_prompt_parts.append("\n\n--- 以下是过去的对话记录 ---")
+        history_lines = []
+        if (
+            mongo_handler
+            and hasattr(mongo_handler, "is_connected")
+            and mongo_handler.is_connected()
+        ):
+            prompt_history_count = self.config_manager.get_history_count_for_prompt()
+            raw_db_history = []
+            if hasattr(mongo_handler, "get_recent_chat_history"):
+                raw_db_history = (
+                    mongo_handler.get_recent_chat_history(
+                        count=prompt_history_count,
+                        role_play_character=pet_name,
+                    )
+                    or []
+                )
+            if raw_db_history:
+                for msg_entry in raw_db_history:
+                    sender_val = msg_entry.get("sender")
+                    text_content = msg_entry.get("message_text", "")
+                    speaker_prefix = ""
+                    if isinstance(sender_val, str) and sender_val.lower() == "user":
+                        speaker_prefix = f"{user_name}: "
+                    elif (
+                        isinstance(sender_val, str)
+                        and sender_val.lower() == pet_name.lower()
+                    ):
+                        speaker_prefix = f"{pet_name}: "
+                    elif sender_val and isinstance(sender_val, str):
+                        speaker_prefix = f"{sender_val}: "
+                    if text_content and speaker_prefix:
+                        history_lines.append(f"{speaker_prefix}{text_content}")
+        if history_lines:
+            full_prompt_parts.append("\n" + "\n".join(history_lines))
+        else:
+            full_prompt_parts.append("\n(没有找到相关的对话历史)")
+        full_prompt_parts.append("--- 对话历史结束 ---")
+        full_prompt_parts.append(f"\n--- 当前对话 ---")
+        full_prompt_parts.append(f"{user_name}: {new_user_message_text}")
+        full_prompt_parts.append(f"\n{pet_name}:")
+        unified_prompt_string = "\n".join(full_prompt_parts)
+        print(
+            f"\n>>> [PromptBuilder.build_unified_chat_prompt_string] Unified Prompt String (Preview):\n"
+            f"--- Start (first 300 chars) ---\n{unified_prompt_string[:300]}...\n"
+            f"--- End (last 300 chars) ---\n...{unified_prompt_string[-300:]}\n"
+            f"--- Total Length: {len(unified_prompt_string)} ---"
+        )
+        return unified_prompt_string
+
     def build_screen_analysis_prompt(
         self, pet_name: str, user_name: str, available_emotions: List[str]
     ) -> str:
@@ -84,10 +163,6 @@ class PromptBuilder:
     def build_topic_specific_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
-        """
-        构建主题特定摘要的prompt。
-        对应原 Hippocampus._create_topic_specific_summary_prompt()
-        """
         return (
             f"请仔细阅读以下对话内容并生成一段不超过100个中文汉字的摘要。\n"
             f"摘要必须只聚焦于 '{topic}' 这个主题（可携带时间信息，如有人名，则对应发送者名字必须要记录）。\n"
@@ -98,10 +173,6 @@ class PromptBuilder:
         )
 
     def build_find_topics_prompt(self, text_to_analyze: str, num_topics: int) -> str:
-        """
-        构建从文本中提取主题的prompt。
-        对应原 Hippocampus._create_find_topic_prompt()
-        """
         return (
             f"以下是一段对话记录：\n---\n{text_to_analyze}\n---\n"
             f"请从这段对话中提取出不超过 {num_topics} 个最核心、最具代表性的关键词或主题概念。"
@@ -118,10 +189,6 @@ class PromptBuilder:
         candidate_memories: List[Tuple[str, str, float]],
         target_selection_count: int,
     ) -> str:
-        """
-        构建用于记忆重排的相关性检查prompt。
-        对应原 Hippocampus._create_bulk_relevance_check_prompt()
-        """
         mem_list = "".join(
             f"{i+1}.主题:{t}\n 摘要:{s}\n\n"
             for i, (t, s, _) in enumerate(candidate_memories)
