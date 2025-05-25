@@ -65,13 +65,13 @@ class ChatDialog(QDialog):
 
     def __init__(
         self,
-        gemini_client,
-        mongo_handler,
-        config_manager,
+        gemini_client: Any,
+        mongo_handler: Any,
+        config_manager: Any,
         hippocampus_manager: Optional[HippocampusManager],
         pet_avatar_path: str,
         user_avatar_path: str,
-        parent=None,
+        parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.gemini_client = gemini_client
@@ -85,8 +85,6 @@ class ChatDialog(QDialog):
         self.original_user_avatar_path = user_avatar_path
         self.current_script_dir = os.path.dirname(os.path.abspath(__file__))
         self.avatar_cache_dir = os.path.join(self.current_script_dir, ".avatar_cache")
-        self.is_pet_avatar_processed_by_pillow = False
-        self.is_user_avatar_processed_by_pillow = False
         if PILLOW_AVAILABLE:
             if not os.path.exists(self.avatar_cache_dir):
                 try:
@@ -95,6 +93,8 @@ class ChatDialog(QDialog):
                     print(
                         f"ChatDialog: Warning: Could not create avatar cache directory: {self.avatar_cache_dir}. Error: {e}"
                     )
+        self.is_pet_avatar_processed_by_pillow = False
+        self.is_user_avatar_processed_by_pillow = False
         path_for_pet_qurl = self.original_pet_avatar_path
         if (
             PILLOW_AVAILABLE
@@ -113,7 +113,9 @@ class ChatDialog(QDialog):
                 )
         self.pet_avatar_qurl = ""
         if path_for_pet_qurl and os.path.exists(path_for_pet_qurl):
-            self.pet_avatar_qurl = QUrl.fromLocalFile(path_for_pet_qurl).toString()
+            self.pet_avatar_qurl = QUrl.fromLocalFile(
+                os.path.abspath(path_for_pet_qurl)
+            ).toString()
         path_for_user_qurl = self.original_user_avatar_path
         if (
             PILLOW_AVAILABLE
@@ -132,7 +134,9 @@ class ChatDialog(QDialog):
                 )
         self.user_avatar_qurl = ""
         if path_for_user_qurl and os.path.exists(path_for_user_qurl):
-            self.user_avatar_qurl = QUrl.fromLocalFile(path_for_user_qurl).toString()
+            self.user_avatar_qurl = QUrl.fromLocalFile(
+                os.path.abspath(path_for_user_qurl)
+            ).toString()
         self.setWindowTitle(f"与 {self.pet_name} 聊天")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -183,14 +187,14 @@ class ChatDialog(QDialog):
             name_part, _ = os.path.splitext(original_filename)
             file_mtime = os.path.getmtime(image_path)
             safe_name_part = "".join(c if c.isalnum() else "_" for c in name_part)
+            if not safe_name_part:
+                safe_name_part = "avatar"
             cached_filename = (
                 f"{safe_name_part}_orig_res_circular_{int(file_mtime)}.png"
             )
             cached_image_path = os.path.join(self.avatar_cache_dir, cached_filename)
             if os.path.exists(cached_image_path):
                 return cached_image_path
-            if not os.path.exists(self.avatar_cache_dir):
-                os.makedirs(self.avatar_cache_dir, exist_ok=True)
             img = Image.open(image_path)
             original_width, original_height = img.size
             crop_size = min(original_width, original_height)
@@ -213,7 +217,16 @@ class ChatDialog(QDialog):
     def _get_raw_chat_history_for_display(self) -> list:
         history_list = []
         if self.mongo_handler and self.mongo_handler.is_connected():
-            display_count = self.config_manager.get_history_count_for_prompt() * 2
+            chat_dialog_internal_default_count = (
+                self.config_manager.get_history_count_for_prompt() * 2
+            )
+            configured_display_count = (
+                self.config_manager.get_chat_dialog_display_history_count(default=0)
+            )
+            if configured_display_count > 0:
+                display_count = configured_display_count
+            else:
+                display_count = chat_dialog_internal_default_count
             raw_history = self.mongo_handler.get_recent_chat_history(
                 count=display_count,
                 role_play_character=self.current_role_play_character,
@@ -226,52 +239,6 @@ class ChatDialog(QDialog):
                     }
                 )
         return history_list
-
-    def _get_cleaned_gemini_sdk_history_from_db(self) -> list:
-        sdk_formatted_history = []
-        if not (self.mongo_handler and self.mongo_handler.is_connected()):
-            return sdk_formatted_history
-        prompt_history_count = self.config_manager.get_history_count_for_prompt()
-        raw_db_history = self.mongo_handler.get_recent_chat_history(
-            count=prompt_history_count,
-            role_play_character=self.current_role_play_character,
-        )
-        if not raw_db_history:
-            return sdk_formatted_history
-        temp_history = []
-        for msg_entry in raw_db_history:
-            sender_val = msg_entry.get("sender")
-            role = (
-                "user"
-                if isinstance(sender_val, str) and sender_val.lower() == "user"
-                else "model"
-            )
-            text_content = msg_entry.get("message_text", "")
-            if text_content:
-                temp_history.append({"role": role, "text": text_content})
-        if not temp_history:
-            return sdk_formatted_history
-        current_merged_text = ""
-        current_role = None
-        for msg in temp_history:
-            role, text = msg["role"], msg["text"]
-            if current_role is None:
-                current_role = role
-                current_merged_text = text
-            elif role == current_role:
-                current_merged_text += "\n" + text
-            else:
-                if current_merged_text:
-                    sdk_formatted_history.append(
-                        {"role": current_role, "parts": [{"text": current_merged_text}]}
-                    )
-                current_role = role
-                current_merged_text = text
-        if current_role and current_merged_text:
-            sdk_formatted_history.append(
-                {"role": current_role, "parts": [{"text": current_merged_text}]}
-            )
-        return sdk_formatted_history
 
     def _cleanup_async_resources(self):
         if self.async_runner:
@@ -442,8 +409,8 @@ class ChatDialog(QDialog):
             <div style="text-align: right; margin-bottom:10px;">
                 <table cellpadding="5" cellspacing="5" border="5" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
                   <tr>
-                    <td style="vertical-align:top;">{text_html}</td>
-                    <td style="width:{current_display_size}px; vertical-align:top; padding-left:10px;">{avatar_img_html}</td>
+                    <td style="vertical-align:top; padding-right:10px;">{text_html}</td>
+                    <td style="width:{current_display_size}px; vertical-align:top;">{avatar_img_html}</td>
                   </tr>
                 </table>
             </div>"""
@@ -464,8 +431,9 @@ class ChatDialog(QDialog):
         self, sender_name_for_log_only: str, message: str, is_user: bool
     ):
         avatar_qurl = self.user_avatar_qurl if is_user else self.pet_avatar_qurl
+        actual_sender_name = self.user_name if is_user else self.pet_name
         html_content = self._format_message_html(
-            sender_name_for_log_only, message, avatar_qurl, is_user
+            actual_sender_name, message, avatar_qurl, is_user
         )
         self.chat_display.append(html_content)
         self.chat_display.ensureCursorVisible()
@@ -484,14 +452,9 @@ class ChatDialog(QDialog):
         else:
             no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
             self.chat_display.setHtml(no_history_html)
-        cleaned_history_for_gemini_init = self._get_cleaned_gemini_sdk_history_from_db()
         try:
-            self.gemini_client.start_chat_session(
-                history=cleaned_history_for_gemini_init
-            )
-            print(
-                f"ChatDialog: Gemini chat session started/restarted with {len(cleaned_history_for_gemini_init)} history turns."
-            )
+            self.gemini_client.start_chat_session()
+            print(f"ChatDialog: Gemini chat session started/restarted by GeminiClient.")
         except Exception as e:
             error_message = f"启动/重启Gemini聊天会话失败: {html.escape(str(e))}"
             print(f"ERROR: Exception during gemini_client.start_chat_session: {e}")
@@ -532,3 +495,68 @@ class ChatDialog(QDialog):
                 )
         self._cleanup_async_resources()
         super().reject()
+
+
+if __name__ == "__main__":
+
+    class MockMongoHandler:
+        def is_connected(self):
+            return True
+
+        def get_recent_chat_history(self, count, role_play_character):
+            return []
+
+        def insert_chat_message(self, sender, message_text, role_play_character):
+            pass
+
+    class MockConfigManager:
+        def get_user_name(self):
+            return "TestUser"
+
+        def get_pet_name(self):
+            return "TestPet"
+
+        def get_history_count_for_prompt(self):
+            return 3
+
+        def get_chat_dialog_display_history_count(self, default: int = 0) -> int:
+            return default
+
+    class MockGeminiClient:
+        def start_chat_session(self):
+            pass
+
+        def send_message(self, message: str):
+            return {"text": f"Mock response to: {message}", "emotion": "neutral"}
+
+    class MockHippocampusManager:
+        _initialized = True
+
+        async def get_memory_from_text(self, text: str):
+            return []
+
+    app = QApplication(sys.argv)
+    async_event_loop = None
+    try:
+        async_event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        async_event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(async_event_loop)
+    test_assets_dir = os.path.join(os.path.dirname(__file__), "test_assets_chatdialog")
+    os.makedirs(test_assets_dir, exist_ok=True)
+    test_pet_avatar = os.path.join(test_assets_dir, "pet_test.png")
+    test_user_avatar = os.path.join(test_assets_dir, "user_test.png")
+    if not os.path.exists(test_pet_avatar) and PILLOW_AVAILABLE:
+        Image.new("RGB", (64, 64), color="blue").save(test_pet_avatar)
+    if not os.path.exists(test_user_avatar) and PILLOW_AVAILABLE:
+        Image.new("RGB", (64, 64), color="green").save(test_user_avatar)
+    dialog = ChatDialog(
+        gemini_client=MockGeminiClient(),
+        mongo_handler=MockMongoHandler(),
+        config_manager=MockConfigManager(),
+        hippocampus_manager=MockHippocampusManager(),
+        pet_avatar_path=test_pet_avatar if PILLOW_AVAILABLE else "",
+        user_avatar_path=test_user_avatar if PILLOW_AVAILABLE else "",
+    )
+    dialog.open_dialog()
+    sys.exit(app.exec())

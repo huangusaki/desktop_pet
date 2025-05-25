@@ -114,6 +114,9 @@ class AsyncioHelper:
 
     @staticmethod
     def _run_loop():
+        if AsyncioHelper._loop is None:
+            print("ERROR Main: _run_loop called with _loop as None")
+            return
         asyncio.set_event_loop(AsyncioHelper._loop)
         if AsyncioHelper._is_running_event:
             AsyncioHelper._is_running_event.set()
@@ -135,13 +138,16 @@ class AsyncioHelper:
             print("DEBUG Main: Requesting asyncio event loop to stop.")
             tasks = asyncio.all_tasks(loop=AsyncioHelper._loop)
             if tasks:
-                for task in tasks:
-                    task.cancel()
 
                 async def cancel_all_and_stop():
+                    if AsyncioHelper._loop is None:
+                        return
                     for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(
+                        *[t for t in tasks if not t.done()], return_exceptions=True
+                    )
                     AsyncioHelper._loop.stop()
 
                 AsyncioHelper._loop.call_soon_threadsafe(
@@ -189,7 +195,7 @@ class AsyncioHelper:
 def create_placeholder_avatar(
     image_path: str, text: str, size=(64, 64), bg_color=(128, 128, 128, 200)
 ):
-    if not Image:
+    if not Image or not ImageDraw or not ImageFont:
         print(f"Pillow not available, cannot create placeholder for {image_path}")
         return
     try:
@@ -218,7 +224,12 @@ def create_placeholder_avatar(
             text_width, text_height = (
                 font.getsize(text)
                 if hasattr(font, "getsize")
-                else (len(text) * font_size / 1.5, font_size)
+                else (
+                    len(text)
+                    * (font.size if hasattr(font, "size") else font_size)
+                    / 1.5,
+                    (font.size if hasattr(font, "size") else font_size),
+                )
             )
             x = (size[0] - text_width) / 2
             y = (size[1] - text_height) / 2
@@ -435,6 +446,11 @@ async def initialize_async_services():
                     "CRITICAL ERROR: PromptBuilder not initialized before GeminiClient."
                 )
                 return False
+            if not mongo_handler_global:
+                print(
+                    "CRITICAL ERROR: MongoHandler not initialized before GeminiClient (but mongo_ok was true, this is an inconsistency)."
+                )
+                return False
             gemini_client_global = GeminiClient(
                 api_key=chat_api_key,
                 model_name=chat_model_name,
@@ -443,6 +459,8 @@ async def initialize_async_services():
                 pet_persona=pet_persona,
                 prompt_builder=prompt_builder_global,
                 available_emotions=available_emotions_global,
+                mongo_handler=mongo_handler_global,
+                config_manager=config_manager_global,
             )
             print("主聊天 Gemini客户端初始化成功。")
             gemini_ok = True
@@ -479,6 +497,9 @@ async def initialize_async_services():
                 print(
                     "CRITICAL ERROR: PromptBuilder not initialized before HippocampusManager."
                 )
+                return False
+            if not hippocampus_manager_global:
+                print("ERROR: HippocampusManager.get_instance() returned None.")
                 return False
             print(
                 "DEBUG: Attempting hippocampus_manager_global.initialize_singleton..."
@@ -526,6 +547,15 @@ def open_chat_dialog_handler():
         if not gemini_client_global:
             QMessageBox.warning(None, "服务未就绪", "Gemini 服务尚未初始化。")
             return
+        if not mongo_handler_global:
+            QMessageBox.warning(None, "服务未就绪", "数据库服务尚未初始化。")
+            return
+        if not config_manager_global:
+            QMessageBox.warning(None, "服务未就绪", "配置服务尚未初始化。")
+            return
+        if not pet_avatar_path_global or not user_avatar_path_global:
+            QMessageBox.warning(None, "资源缺失", "头像路径未正确设置。")
+            return
         chat_dialog_global = ChatDialog(
             gemini_client=gemini_client_global,
             mongo_handler=mongo_handler_global,
@@ -550,7 +580,7 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
     global pet_window_global, chat_dialog_global, mongo_handler_global, config_manager_global
     if pet_window_global:
         pet_window_global.update_speech_and_emotion(text, emotion)
-    if chat_dialog_global:
+    if chat_dialog_global and not chat_dialog_global.isHidden():
         pet_name = (
             config_manager_global.get_pet_name() if config_manager_global else "宠物"
         )
@@ -666,7 +696,8 @@ def schedule_memory_tasks(app: QApplication):
 
 if __name__ == "__main__":
     if Image is None:
-        _app_temp_pillow_check = QApplication(sys.argv)
+        if QApplication.instance() is None:
+            _app_temp_pillow_check = QApplication(sys.argv)
         QMessageBox.critical(
             None,
             "依赖缺失",
@@ -699,10 +730,15 @@ if __name__ == "__main__":
         init_future_concurrent = AsyncioHelper.schedule_task(do_initialization())
         if init_future_concurrent:
             try:
-                initialization_succeeded = init_future_concurrent.result(timeout=30)
+                initialization_succeeded = init_future_concurrent.result(timeout=60)
                 print(
                     f"DEBUG Main: initialize_async_services completed. Result: {initialization_succeeded}"
                 )
+            except asyncio.TimeoutError:
+                print(
+                    "CRITICAL ERROR: initialize_async_services timed out after 60 seconds."
+                )
+                initialization_succeeded = False
             except Exception as e:
                 print(
                     f"CRITICAL ERROR: Waiting for initialize_async_services future failed: {e}"
@@ -716,6 +752,12 @@ if __name__ == "__main__":
         initialization_succeeded = False
     if not initialization_succeeded:
         QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
+        AsyncioHelper.stop_asyncio_loop()
+        sys.exit(1)
+    if not config_manager_global or not assets_path_global:
+        QMessageBox.critical(
+            None, "配置错误", "ConfigManager 或资源路径未初始化。程序将退出。"
+        )
         AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
     initial_image_filename = config_manager_global.get_pet_initial_image_filename()

@@ -93,6 +93,23 @@ class ConfigManager:
     def get_history_count_for_prompt(self):
         return self.config.getint("MONGODB", "HISTORY_COUNT_FOR_PROMPT", fallback=5)
 
+    def get_chat_dialog_display_history_count(self, default: int = 0) -> int:
+        """
+        获取聊天对话框中用于初始显示的历史记录数量。
+        如果配置中未设置，则可以依赖传入的 default 值。
+        """
+        try:
+            if self.config.has_option("MONGODB", "CHAT_DIALOG_DISPLAY_HISTORY_COUNT"):
+                return self.config.getint(
+                    "MONGODB", "CHAT_DIALOG_DISPLAY_HISTORY_COUNT"
+                )
+            else:
+                return default
+        except (configparser.NoSectionError, configparser.NoOptionError, ValueError):
+            return default
+        except Exception:
+            return default
+
     def get_screen_analysis_enabled(self) -> bool:
         return self.config.getboolean("SCREEN_ANALYSIS", "ENABLED", fallback=False)
 
