@@ -122,9 +122,6 @@ class GeminiClient:
                 "temperature": 0.75,
             }
             api_config = types.GenerateContentConfig(**generation_config_args)
-            print(
-                f"----------------------------{chat_contents[0][:200]}... (this is the start of the single string in contents list)---------------------"
-            )
             response_object = self.client.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
