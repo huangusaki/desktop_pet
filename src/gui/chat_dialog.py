@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QThread, QObject
-from PyQt6.QtGui import QTextCursor
+from PyQt6.QtGui import QIcon, QPixmap
 import asyncio
 import sys
 from typing import Optional, List, Any, Dict
@@ -137,7 +137,10 @@ class ChatDialog(QDialog):
             self.user_avatar_qurl = QUrl.fromLocalFile(
                 os.path.abspath(path_for_user_qurl)
             ).toString()
-        self.setWindowTitle(f"与 {self.pet_name} 聊天")
+        transparent_pixmap = QPixmap(1, 1)
+        transparent_pixmap.fill(Qt.GlobalColor.transparent)
+        self.setWindowIcon(QIcon(transparent_pixmap))
+        self.setWindowTitle(f"与{self.pet_name}聊天")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         container_widget = QWidget(self)
@@ -409,7 +412,7 @@ class ChatDialog(QDialog):
             text_html = f'<div style="color:white; {text_block_common_style}">{escaped_message}</div>'
             formatted_message = f"""
             <div style="text-align: right; margin-bottom:10px;">
-                <table cellpadding="5" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
+                <table cellpadding="10" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
                   <tr>
                     <td style="vertical-align:top; padding-right:10px;">{text_html}</td>
                     <td style="width:{current_display_size}px; vertical-align:top;">{avatar_img_html}</td>
@@ -420,7 +423,7 @@ class ChatDialog(QDialog):
             text_html = f'<div style="color:#e0e0e0; {text_block_common_style}">{escaped_message}</div>'
             formatted_message = f"""
             <div style="text-align: left; margin-bottom:10px;">
-                <table cellpadding="5" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
+                <table cellpadding="10" cellspacing="5" border="-3" style="display: inline-table; border-collapse:collapse; vertical-align:top;">
                   <tr>
                     <td style="width:{current_display_size}px; vertical-align:top; padding-right:10px;">{avatar_img_html}</td>
                     <td style="vertical-align:top;">{text_html}</td>
