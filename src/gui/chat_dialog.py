@@ -452,14 +452,6 @@ class ChatDialog(QDialog):
         else:
             no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
             self.chat_display.setHtml(no_history_html)
-        try:
-            self.gemini_client.start_chat_session()
-            print(f"ChatDialog: Gemini chat session started/restarted by GeminiClient.")
-        except Exception as e:
-            error_message = f"启动/重启Gemini聊天会话失败: {html.escape(str(e))}"
-            print(f"ERROR: Exception during gemini_client.start_chat_session: {e}")
-            error_html = f"<div style='padding:10px 0; color:#EF5350; text-align:center;'><i>{error_message}</i></div>"
-            self.chat_display.append(error_html)
         self.input_field.clear()
         self.show()
         self.activateWindow()
