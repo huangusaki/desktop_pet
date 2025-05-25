@@ -232,6 +232,11 @@ class ScreenAnalyzer(QObject):
         emotion = response_data.get("emotion", "default")
         print(f"ScreenAnalyzer: LLM Response - Text: '{text}', Emotion: '{emotion}'")
         self.pet_reaction_ready.emit(text, emotion)
+        if self.analysis_thread and self.analysis_thread.isRunning():
+            print(
+                "ScreenAnalyzer: LLM response handled, requesting analysis thread to quit."
+            )
+            self.analysis_thread.quit()
 
     @pyqtSlot(str)
     def _handle_worker_error(self, error_message: str):
@@ -239,25 +244,43 @@ class ScreenAnalyzer(QObject):
         if self.pet_window and self._pet_was_visible_before_grab:
             self.pet_window.show()
             QApplication.processEvents()
+        if self.analysis_thread and self.analysis_thread.isRunning():
+            print(
+                "ScreenAnalyzer: Worker error handled, requesting analysis thread to quit."
+            )
+            self.analysis_thread.quit()
 
     def _cleanup_thread_and_worker(self):
         print("ScreenAnalyzer: Cleaning up worker thread and worker object.")
         if self.worker:
             try:
-                self.worker.request_gui_hide_before_grab.disconnect()
-                self.worker.request_gui_show_after_grab.disconnect()
-                self.worker.analysis_complete.disconnect()
-                self.worker.error_occurred.disconnect()
-                self.ready_for_worker_grab.disconnect(self.worker.gui_is_ready_for_grab)
-            except TypeError:
-                pass
-            except RuntimeError:
-                pass
+                self.worker.request_gui_hide_before_grab.disconnect(
+                    self._handle_hide_request
+                )
+                self.worker.request_gui_show_after_grab.disconnect(
+                    self._handle_show_request
+                )
+                self.worker.analysis_complete.disconnect(self._handle_llm_response)
+                self.worker.error_occurred.disconnect(self._handle_worker_error)
+                if hasattr(self.worker, "gui_is_ready_for_grab"):
+                    self.ready_for_worker_grab.disconnect(
+                        self.worker.gui_is_ready_for_grab
+                    )
+            except TypeError as e:
+                print(
+                    f"ScreenAnalyzer: TypeError during disconnect in cleanup (normal if already disconnected): {e}"
+                )
+            except RuntimeError as e:
+                print(
+                    f"ScreenAnalyzer: RuntimeError during disconnect in cleanup (might indicate an issue): {e}"
+                )
             self.worker.deleteLater()
             self.worker = None
         if self.analysis_thread:
             if self.analysis_thread.isRunning():
-                print("ScreenAnalyzer: Waiting for analysis thread to finish...")
+                print(
+                    "ScreenAnalyzer: WARNING - Analysis thread still running during cleanup triggered by its own 'finished' signal. Forcing quit."
+                )
                 self.analysis_thread.quit()
                 self.analysis_thread.wait(1000)
             self.analysis_thread.deleteLater()

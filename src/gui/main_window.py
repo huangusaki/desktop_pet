@@ -16,6 +16,7 @@ class PetWindow(QWidget):
     ):
         super().__init__()
         self._drag_pos = QPoint()
+        self._is_dragging = False
         self.assets_base_path = assets_base_path
         self.current_emotion = "default"
         self.pixmap_cache = {}
@@ -197,25 +198,26 @@ class PetWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
+            print("PetWindow: DEBUG - mouseDoubleClickEvent triggered")
             self.request_open_chat_dialog.emit()
         super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
         modifiers = QApplication.keyboardModifiers()
-        if event.button() == Qt.MouseButton.LeftButton and (
-            modifiers == Qt.KeyboardModifier.AltModifier
-        ):
-            self._drag_pos = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        if event.button() == Qt.MouseButton.LeftButton:
+            print(
+                f"PetWindow: DEBUG - mousePressEvent (Button: Left, Alt: {modifiers == Qt.KeyboardModifier.AltModifier})"
             )
-            self._is_dragging = True
-            event.accept()
-        elif event.button() == Qt.MouseButton.LeftButton:
-            if not (hasattr(self, "_is_dragging") and self._is_dragging):
-                self._auto_align_to_taskbar_right()
-            event.ignore()
+            if modifiers == Qt.KeyboardModifier.AltModifier:
+                self._drag_pos = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                )
+                self._is_dragging = True
+                event.accept()
+            else:
+                event.accept()
         else:
-            event.ignore()
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if (
@@ -226,18 +228,21 @@ class PetWindow(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
         else:
-            event.ignore()
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and hasattr(self, "_is_dragging")
-            and self._is_dragging
-        ):
-            self._is_dragging = False
-            event.accept()
+        if event.button() == Qt.MouseButton.LeftButton:
+            print(
+                f"PetWindow: DEBUG - mouseReleaseEvent (Button: Left, Dragging: {self._is_dragging})"
+            )
+            was_dragging = hasattr(self, "_is_dragging") and self._is_dragging
+            if was_dragging:
+                self._is_dragging = False
+                event.accept()
+            else:
+                event.accept()
         else:
-            event.ignore()
+            super().mouseReleaseEvent(event)
 
     def _set_pet_size(self, size_name: str):
         if self.pet_size_preference != size_name:

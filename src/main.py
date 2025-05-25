@@ -536,7 +536,6 @@ async def initialize_async_services():
             "INFO: Memory system skipped due to MongoDB issue or HippocampusManager/MemoryConfig not imported."
         )
         hippocampus_manager_global = None
-    print("DEBUG: Exiting initialize_async_services.")
     return True
 
 
@@ -556,24 +555,42 @@ def open_chat_dialog_handler():
         if not pet_avatar_path_global or not user_avatar_path_global:
             QMessageBox.warning(None, "资源缺失", "头像路径未正确设置。")
             return
-        chat_dialog_global = ChatDialog(
-            gemini_client=gemini_client_global,
-            mongo_handler=mongo_handler_global,
-            config_manager=config_manager_global,
-            hippocampus_manager=hippocampus_manager_global,
-            pet_avatar_path=pet_avatar_path_global,
-            user_avatar_path=user_avatar_path_global,
-            parent=pet_window_global,
-        )
+        try:
+            chat_dialog_global = ChatDialog(
+                gemini_client=gemini_client_global,
+                mongo_handler=mongo_handler_global,
+                config_manager=config_manager_global,
+                hippocampus_manager=hippocampus_manager_global,
+                pet_avatar_path=pet_avatar_path_global,
+                user_avatar_path=user_avatar_path_global,
+                parent=pet_window_global,
+            )
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            QMessageBox.critical(None, "聊天窗口错误", f"创建聊天窗口失败: {e}")
+            chat_dialog_global = None
+            return
         if pet_window_global:
             chat_dialog_global.speech_and_emotion_received.connect(
                 pet_window_global.update_speech_and_emotion
             )
-    if chat_dialog_global.isHidden():
-        chat_dialog_global.open_dialog()
-    else:
-        chat_dialog_global.activateWindow()
-        chat_dialog_global.raise_()
+    if chat_dialog_global:
+        if chat_dialog_global.isHidden():
+            try:
+                chat_dialog_global.open_dialog()
+            except Exception as e:
+                print(
+                    f"CRITICAL main.py: Error calling chat_dialog_global.open_dialog(): {e}"
+                )
+                import traceback
+
+                traceback.print_exc()
+                QMessageBox.critical(None, "聊天窗口错误", f"打开聊天窗口失败: {e}")
+        else:
+            chat_dialog_global.activateWindow()
+            chat_dialog_global.raise_()
 
 
 def handle_screen_analysis_reaction(text: str, emotion: str):
@@ -588,7 +605,6 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         chat_dialog_global._add_message_to_display(
             sender_name_for_log_only=pet_name, message=display_text, is_user=False
         )
-        print(f"Main: Screen reaction ('{text}') added to ChatDialog display.")
     if mongo_handler_global and mongo_handler_global.is_connected():
         current_pet_character = (
             config_manager_global.get_pet_name()
@@ -597,7 +613,7 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         )
         db_text = f"（看了一眼屏幕）{text}"
         mongo_handler_global.insert_chat_message(
-            sender="pet_screen_reaction",
+            sender=config_manager_global.get_pet_name(),
             message_text=db_text,
             role_play_character=current_pet_character,
         )

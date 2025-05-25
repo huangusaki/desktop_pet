@@ -269,8 +269,9 @@ class ChatDialog(QDialog):
             return
         self._add_message_to_display(self.user_name, user_message, is_user=True)
         if self.mongo_handler and self.mongo_handler.is_connected():
+            actual_user_name = self.config_manager.get_user_name()
             self.mongo_handler.insert_chat_message(
-                sender="user",
+                sender=actual_user_name,
                 message_text=user_message,
                 role_play_character=self.current_role_play_character,
             )
@@ -347,8 +348,9 @@ class ChatDialog(QDialog):
         pet_emotion = response_data.get("emotion", "default")
         self._add_message_to_display(self.pet_name, pet_text, is_user=False)
         if self.mongo_handler and self.mongo_handler.is_connected():
+            actual_pet_name = self.config_manager.get_pet_name()
             self.mongo_handler.insert_chat_message(
-                sender="pet",
+                sender=actual_pet_name,
                 message_text=pet_text,
                 role_play_character=self.current_role_play_character,
             )
