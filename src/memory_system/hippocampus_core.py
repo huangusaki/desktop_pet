@@ -702,8 +702,11 @@ class ParahippocampalGyrus:
         processed_count = 0
         for i, messages in enumerate(memory_samples):
             sample_time = time.time()
-            logger.info(f"处理样本 {i+1}/{len(memory_samples)}...")
+            logger.info(
+                f"Processing sample {i+1}/{len(memory_samples)}. Raw messages count: {len(messages) if messages else 'None'}"
+            )
             if not messages:
+                logger.info(f"Sample {i+1} is empty. Skipping.")
                 continue
             input_text, earliest_ts, latest_ts, valid_msgs = (
                 "",
@@ -711,18 +714,32 @@ class ParahippocampalGyrus:
                 float("-inf"),
                 0,
             )
-            for msg in messages:
+            for msg_idx, msg in enumerate(messages):
                 txt, ts = msg.get("message_text", ""), msg.get("timestamp")
+                logger.debug(
+                    f"  Sample {i+1}, Msg {msg_idx+1}: Text='{str(txt)[:50]}...', Timestamp='{ts}', Type(txt)={type(txt)}, Type(ts)={type(ts)}"
+                )
                 if (
                     isinstance(txt, str)
                     and txt.strip()
                     and isinstance(ts, (int, float))
                 ):
+                    logger.debug(f"    Msg {msg_idx+1} is valid. Adding to input_text.")
                     input_text += f"{txt}\n"
                     earliest_ts = min(earliest_ts, ts)
                     latest_ts = max(latest_ts, ts)
                     valid_msgs += 1
+                else:
+                    logger.debug(
+                        f"    Msg {msg_idx+1} is NOT valid. Text empty/whitespace after strip: {not txt.strip() if isinstance(txt, str) else 'N/A (not str)'}, Timestamp valid: {isinstance(ts, (int, float))}"
+                    )
+            logger.info(
+                f"Sample {i+1} processing complete. Resulting input_text (first 100 chars): '{input_text[:100]}...', valid_msgs: {valid_msgs}"
+            )
             if not input_text.strip() or valid_msgs == 0:
+                logger.info(
+                    f"Sample {i+1} resulted in empty/invalid input_text or zero valid messages. Skipping LLM processing for this sample."
+                )
                 continue
             processed_count += 1
             time_info = "时间未知"

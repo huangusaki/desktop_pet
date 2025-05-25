@@ -83,7 +83,7 @@ class MongoHandler:
             print("错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法插入消息。")
             return None
         message_document: Dict[str, Any] = {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).timestamp(),
             "sender": sender,
             "message_text": message_text,
             "role_play_character": role_play_character,
