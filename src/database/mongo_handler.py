@@ -19,9 +19,11 @@ class MongoHandler:
         self.graph_nodes_collection_name = "graph_data_nodes"
         self.graph_edges_collection_name = "graph_data_edges"
         self.llm_usage_collection_name = "llm_usage"
+        self.screen_analysis_log_collection_name = "screen_analysis_log"
         self.graph_nodes_collection: Optional[Collection] = None
         self.graph_edges_collection: Optional[Collection] = None
         self.llm_usage_collection: Optional[Collection] = None
+        self.screen_analysis_log_collection: Optional[Collection] = None
         self._connect()
 
     def _connect(self):
@@ -35,6 +37,9 @@ class MongoHandler:
             self.graph_nodes_collection = self.db[self.graph_nodes_collection_name]
             self.graph_edges_collection = self.db[self.graph_edges_collection_name]
             self.llm_usage_collection = self.db[self.llm_usage_collection_name]
+            self.screen_analysis_log_collection = self.db[
+                self.screen_analysis_log_collection_name
+            ]
             print(
                 f"成功连接到 MongoDB: {self.connection_string}, 数据库: '{self.database_name}'"
             )
@@ -42,6 +47,9 @@ class MongoHandler:
             print(f"  Graph nodes collection: '{self.graph_nodes_collection_name}'")
             print(f"  Graph edges collection: '{self.graph_edges_collection_name}'")
             print(f"  LLM usage collection: '{self.llm_usage_collection_name}'")
+            print(
+                f"  Screen analysis log collection: '{self.screen_analysis_log_collection_name}'"
+            )
         except ConnectionFailure as e:
             print(f"无法连接到 MongoDB ({self.connection_string}): {e}")
             self._clear_connections()
@@ -57,6 +65,7 @@ class MongoHandler:
         self.graph_nodes_collection = None
         self.graph_edges_collection = None
         self.llm_usage_collection = None
+        self.screen_analysis_log_collection = None
 
     def is_connected(self) -> bool:
         return (
@@ -66,6 +75,7 @@ class MongoHandler:
             and self.graph_nodes_collection is not None
             and self.graph_edges_collection is not None
             and self.llm_usage_collection is not None
+            and self.screen_analysis_log_collection is not None
         )
 
     def get_database(self) -> Optional[Database]:
@@ -95,6 +105,31 @@ class MongoHandler:
         except Exception as e:
             print(
                 f"插入聊天消息到 MongoDB ('{self.chat_history_collection_name}') 时出错: {e}"
+            )
+            return None
+
+    def insert_screen_analysis_log_entry(
+        self,
+        sender: str,
+        message_text: str,
+        role_play_character: Optional[str] = None,
+    ) -> Optional[str]:
+        if not self.is_connected() or self.screen_analysis_log_collection is None:
+            print("错误: 未连接到 MongoDB 或屏幕分析日志集合未初始化，无法插入条目。")
+            return None
+        log_entry: Dict[str, Any] = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).timestamp(),
+            "sender": sender,
+            "message_text": message_text,
+            "role_play_character": role_play_character,
+            "memorized_times": 0,
+        }
+        try:
+            result = self.screen_analysis_log_collection.insert_one(log_entry)
+            return str(result.inserted_id)
+        except Exception as e:
+            print(
+                f"插入屏幕分析日志到 MongoDB ('{self.screen_analysis_log_collection_name}') 时出错: {e}"
             )
             return None
 

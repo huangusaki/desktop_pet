@@ -41,6 +41,11 @@ class ConfigManager:
     def get_gemini_api_key(self):
         return self.config.get("GEMINI", "API_KEY", fallback=None)
 
+    def get_screen_analysis_save_to_chat_history(self) -> bool:
+        return self.config.getboolean(
+            "SCREEN_ANALYSIS", "SAVE_REACTION_TO_CHAT_HISTORY", fallback=True
+        )
+
     def get_gemini_model_name(self):
         return self.config.get(
             "GEMINI", "MODEL_NAME", fallback="gemini-1.5-flash-latest"

@@ -235,7 +235,7 @@ def setup_environment_and_config() -> bool:
                     "[MONGODB]\nCONNECTION_STRING = mongodb://localhost:27017/\nDATABASE_NAME = desktop_pet_db\nCOLLECTION_NAME = chat_history\nHISTORY_COUNT_FOR_PROMPT = 5\n\n"
                 )
                 cf.write(
-                    "[SCREEN_ANALYSIS]\nENABLED = False\nINTERVAL_SECONDS = 60\nCHANCE = 0.1\nPROMPT = ...\n\n"
+                    "[SCREEN_ANALYSIS]\nENABLED = False\nINTERVAL_SECONDS = 60\nCHANCE = 0.1\nSAVE_REACTION_TO_CHAT_HISTORY = True\nPROMPT = ...\n\n"
                 )
                 cf.write("; --- Memory System Configuration ---\n")
                 cf.write("[MEMORY_SYSTEM]\n")
@@ -586,19 +586,34 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         chat_dialog_global._add_message_to_display(
             sender_name_for_log_only=pet_name, message=display_text, is_user=False
         )
-    if mongo_handler_global and mongo_handler_global.is_connected():
-        current_pet_character = (
-            config_manager_global.get_pet_name()
-            if config_manager_global
-            else "DefaultPet"
-        )
+    if (
+        mongo_handler_global
+        and mongo_handler_global.is_connected()
+        and config_manager_global
+    ):
+        pet_name = config_manager_global.get_pet_name()
         db_text = f"{text}"
-        mongo_handler_global.insert_chat_message(
-            sender=config_manager_global.get_pet_name(),
-            message_text=db_text,
-            role_play_character=current_pet_character,
+        save_to_chat_history = (
+            config_manager_global.get_screen_analysis_save_to_chat_history()
         )
-        print(f"Main: Screen reaction ('{text}') saved to MongoDB.")
+        if save_to_chat_history:
+            mongo_handler_global.insert_chat_message(
+                sender=pet_name,
+                message_text=db_text,
+                role_play_character=pet_name,
+            )
+            print(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
+        else:
+            mongo_handler_global.insert_screen_analysis_log_entry(
+                sender=pet_name,
+                message_text=db_text,
+                role_play_character=pet_name,
+            )
+            print(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
+    elif not config_manager_global:
+        print("Main: ConfigManager 未初始化，无法保存屏幕反应。")
+    elif not (mongo_handler_global and mongo_handler_global.is_connected()):
+        print("Main: MongoDB 未连接，无法保存屏幕反应。")
 
 
 async def run_memory_build():
