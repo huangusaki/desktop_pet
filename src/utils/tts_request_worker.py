@@ -2,6 +2,9 @@ import asyncio
 import aiohttp
 from typing import Optional, Any
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QThread
+import logging
+
+logger = logging.getLogger("TtsRequestWorker")
 
 
 class TTSRequestWorker(QObject):

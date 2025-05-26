@@ -15,7 +15,9 @@ from PyQt6.QtGui import QIcon, QPixmap
 import asyncio
 import sys
 from typing import Optional, List, Any, Dict
+import logging
 
+logger = logging.getLogger("ChatDialog")
 try:
     from PIL import Image, ImageDraw, ImageOps
 
@@ -33,7 +35,7 @@ except ImportError:
             sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
             from memory_system.hippocampus_core import HippocampusManager
         except ImportError:
-            print("ChatDialog: CRITICAL: Could not import HippocampusManager.")
+            logger.critical("CRITICAL: Could not import HippocampusManager.")
             HippocampusManager = None
 DISPLAY_AVATAR_SIZE = 28
 
@@ -91,8 +93,8 @@ class ChatDialog(QDialog):
                 try:
                     os.makedirs(self.avatar_cache_dir, exist_ok=True)
                 except OSError as e:
-                    print(
-                        f"ChatDialog: Warning: Could not create avatar cache directory: {self.avatar_cache_dir}. Error: {e}"
+                    logger.warning(
+                        f"Warning: Could not create avatar cache directory: {self.avatar_cache_dir}. Error: {e}"
                     )
         self.is_pet_avatar_processed_by_pillow = False
         self.is_user_avatar_processed_by_pillow = False
@@ -109,8 +111,8 @@ class ChatDialog(QDialog):
                 path_for_pet_qurl = processed_path
                 self.is_pet_avatar_processed_by_pillow = True
             else:
-                print(
-                    f"ChatDialog: Pillow (original res) processing failed for pet avatar, using original: {self.original_pet_avatar_path}"
+                logger.warning(
+                    f"Pillow (original res) processing failed for pet avatar, using original: {self.original_pet_avatar_path}"
                 )
         self.pet_avatar_qurl = ""
         if path_for_pet_qurl and os.path.exists(path_for_pet_qurl):
@@ -130,8 +132,8 @@ class ChatDialog(QDialog):
                 path_for_user_qurl = processed_path
                 self.is_user_avatar_processed_by_pillow = True
             else:
-                print(
-                    f"ChatDialog: Pillow (original res) processing failed for user avatar, using original: {self.original_user_avatar_path}"
+                logger.warning(
+                    f"Pillow (original res) processing failed for user avatar, using original: {self.original_user_avatar_path}"
                 )
         self.user_avatar_qurl = ""
         if path_for_user_qurl and os.path.exists(path_for_user_qurl):
@@ -214,8 +216,9 @@ class ChatDialog(QDialog):
             img_rgba.save(cached_image_path, "PNG")
             return cached_image_path
         except Exception as e:
-            print(
-                f"ChatDialog: Error processing original-res avatar '{image_path}' with Pillow: {e}"
+            logger.error(
+                f"Error processing original-res avatar '{image_path}' with Pillow: {e}",
+                exc_info=True,
             )
             return None
 
@@ -283,7 +286,7 @@ class ChatDialog(QDialog):
         self.input_field.clear()
         QApplication.processEvents()
         if self.async_thread and self.async_thread.isRunning():
-            print("ChatDialog: Previous async task still running. Please wait.")
+            logger.warning("Previous async task still running. Please wait.")
             return
         current_task_thread = QThread(self)
         self.async_runner = AsyncRunner(self._send_message_async_logic(user_message))
@@ -303,31 +306,9 @@ class ChatDialog(QDialog):
         self.async_thread.start()
 
     async def _send_message_async_logic(self, user_message: str) -> Dict[str, Any]:
-        retrieved_memories_text = ""
-        if self.hippocampus_manager and self.hippocampus_manager._initialized:
-            try:
-                memories = await self.hippocampus_manager.get_memory_from_text(
-                    user_message
-                )
-                if memories:
-                    formatted_mems = []
-                    for topic, summary in memories:
-                        formatted_mems.append(f"{topic}: {summary}")
-                    if formatted_mems:
-                        retrieved_memories_text = (
-                            "\n\n以下过去发生过的事可能跟对话有关系，你需要参考一下：\n"
-                            + "\n".join(formatted_mems)
-                            + "\n\n"
-                        )
-            except Exception as e_mem:
-                print(f"ChatDialog: 检索记忆时发生错误: {e_mem}")
-        final_user_input_for_llm = user_message
-        if retrieved_memories_text:
-            final_user_input_for_llm = (
-                f"{retrieved_memories_text}"
-                f"基于以上记忆和你对我的了解，以及我们之前的对话，请回应我的这句话：{user_message}"
-            )
-        response_data = self.gemini_client.send_message(final_user_input_for_llm)
+        response_data = await self.gemini_client.send_message(
+            message_text=user_message, hippocampus_manager=self.hippocampus_manager
+        )
         return response_data
 
     def _handle_async_response(self, response_data: Dict[str, Any]):
@@ -347,8 +328,8 @@ class ChatDialog(QDialog):
             )
         self.speech_and_emotion_received.emit(pet_text, pet_emotion)
         if self._is_closing:
-            print(
-                "ChatDialog: Dialog is closing. Skipping internal UI updates for this response."
+            logger.info(
+                "Dialog is closing. Skipping internal UI updates for this response."
             )
         else:
             self.send_button.setEnabled(True)
@@ -366,14 +347,14 @@ class ChatDialog(QDialog):
             f"呜，我好像出错了... ({error_message[:30]})", "sad"
         )
         if self._is_closing:
-            print(
-                f"ChatDialog: Dialog is closing. Skipping internal UI updates for this failure: {error_message}"
+            logger.info(
+                f"Dialog is closing. Skipping internal UI updates for this failure: {error_message}"
             )
         else:
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             self.input_field.setFocus()
-            print(f"ChatDialog: Async task failed: {error_message}")
+            logger.error(f"Async task failed: {error_message}")
             self._add_message_to_display(
                 self.pet_name, f"发生错误: {error_message}", is_user=False
             )
@@ -468,6 +449,7 @@ class ChatDialog(QDialog):
         self.dialog_closed.emit()
         active_thread = self.async_thread
         if active_thread and active_thread.isRunning():
+            logger.info("Dialog closing, requesting async thread to quit.")
             active_thread.quit()
         else:
             self._cleanup_async_resources()

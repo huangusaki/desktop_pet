@@ -4,6 +4,9 @@ from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
 import datetime
 from typing import Optional, List, Dict, Any
+import logging
+
+logger = logging.getLogger("MongoDB")
 
 
 class MongoHandler:
@@ -40,21 +43,27 @@ class MongoHandler:
             self.screen_analysis_log_collection = self.db[
                 self.screen_analysis_log_collection_name
             ]
-            print(
+            logger.info(
                 f"成功连接到 MongoDB: {self.connection_string}, 数据库: '{self.database_name}'"
             )
-            print(f"  Chat history collection: '{self.chat_history_collection_name}'")
-            print(f"  Graph nodes collection: '{self.graph_nodes_collection_name}'")
-            print(f"  Graph edges collection: '{self.graph_edges_collection_name}'")
-            print(f"  LLM usage collection: '{self.llm_usage_collection_name}'")
-            print(
+            logger.info(
+                f"  Chat history collection: '{self.chat_history_collection_name}'"
+            )
+            logger.info(
+                f"  Graph nodes collection: '{self.graph_nodes_collection_name}'"
+            )
+            logger.info(
+                f"  Graph edges collection: '{self.graph_edges_collection_name}'"
+            )
+            logger.info(f"  LLM usage collection: '{self.llm_usage_collection_name}'")
+            logger.info(
                 f"  Screen analysis log collection: '{self.screen_analysis_log_collection_name}'"
             )
         except ConnectionFailure as e:
-            print(f"无法连接到 MongoDB ({self.connection_string}): {e}")
+            logger.error(f"无法连接到 MongoDB ({self.connection_string}): {e}")
             self._clear_connections()
         except Exception as e:
-            print(f"连接 MongoDB 时发生其他错误: {e}")
+            logger.error(f"连接 MongoDB 时发生其他错误: {e}", exc_info=True)
             self._clear_connections()
 
     def _clear_connections(self):
@@ -90,7 +99,9 @@ class MongoHandler:
         memorized_times: int = 0,
     ) -> Optional[str]:
         if not self.is_connected() or self.chat_collection is None:
-            print("错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法插入消息。")
+            logger.error(
+                "错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法插入消息。"
+            )
             return None
         message_document: Dict[str, Any] = {
             "timestamp": datetime.datetime.now(datetime.timezone.utc).timestamp(),
@@ -103,8 +114,9 @@ class MongoHandler:
             result = self.chat_collection.insert_one(message_document)
             return str(result.inserted_id)
         except Exception as e:
-            print(
-                f"插入聊天消息到 MongoDB ('{self.chat_history_collection_name}') 时出错: {e}"
+            logger.error(
+                f"插入聊天消息到 MongoDB ('{self.chat_history_collection_name}') 时出错: {e}",
+                exc_info=True,
             )
             return None
 
@@ -115,7 +127,9 @@ class MongoHandler:
         role_play_character: Optional[str] = None,
     ) -> Optional[str]:
         if not self.is_connected() or self.screen_analysis_log_collection is None:
-            print("错误: 未连接到 MongoDB 或屏幕分析日志集合未初始化，无法插入条目。")
+            logger.error(
+                "错误: 未连接到 MongoDB 或屏幕分析日志集合未初始化，无法插入条目。"
+            )
             return None
         log_entry: Dict[str, Any] = {
             "timestamp": datetime.datetime.now(datetime.timezone.utc).timestamp(),
@@ -128,8 +142,9 @@ class MongoHandler:
             result = self.screen_analysis_log_collection.insert_one(log_entry)
             return str(result.inserted_id)
         except Exception as e:
-            print(
-                f"插入屏幕分析日志到 MongoDB ('{self.screen_analysis_log_collection_name}') 时出错: {e}"
+            logger.error(
+                f"插入屏幕分析日志到 MongoDB ('{self.screen_analysis_log_collection_name}') 时出错: {e}",
+                exc_info=True,
             )
             return None
 
@@ -137,7 +152,9 @@ class MongoHandler:
         self, count: int = 10, role_play_character: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         if not self.is_connected() or self.chat_collection is None:
-            print("错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法获取聊天记录。")
+            logger.error(
+                "错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法获取聊天记录。"
+            )
             return []
         query: Dict[str, Any] = {}
         if role_play_character:
@@ -150,8 +167,9 @@ class MongoHandler:
             )
             return messages[::-1]
         except Exception as e:
-            print(
-                f"从 MongoDB ('{self.chat_history_collection_name}') 获取聊天记录时出错: {e}"
+            logger.error(
+                f"从 MongoDB ('{self.chat_history_collection_name}') 获取聊天记录时出错: {e}",
+                exc_info=True,
             )
             return []
 
@@ -162,7 +180,7 @@ class MongoHandler:
         Increments the 'memorized_times' for a list of chat message IDs.
         """
         if not self.is_connected() or not self.chat_collection:
-            print(
+            logger.error(
                 "错误: 未连接到 MongoDB 或聊天记录集合未初始化，无法更新 memorized_times。"
             )
             return False
@@ -172,10 +190,12 @@ class MongoHandler:
             result = self.chat_collection.update_many(
                 {"_id": {"$in": message_ids}}, {"$inc": {"memorized_times": increment}}
             )
-            print(f"更新了 {result.modified_count} 条聊天记录的 memorized_times。")
+            logger.info(
+                f"更新了 {result.modified_count} 条聊天记录的 memorized_times。"
+            )
             return True
         except Exception as e:
-            print(f"批量更新聊天记录 memorized_times 时出错: {e}")
+            logger.error(f"批量更新聊天记录 memorized_times 时出错: {e}", exc_info=True)
             return False
 
     def get_graph_nodes_collection(self) -> Optional[Collection]:
@@ -191,8 +211,8 @@ class MongoHandler:
         if self.client:
             try:
                 self.client.close()
-                print("MongoDB 连接已关闭。")
+                logger.info("MongoDB 连接已关闭。")
             except Exception as e:
-                print(f"关闭 MongoDB 连接时出错: {e}")
+                logger.error(f"关闭 MongoDB 连接时出错: {e}", exc_info=True)
             finally:
                 self._clear_connections()

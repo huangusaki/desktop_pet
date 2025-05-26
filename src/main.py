@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 import threading
+import coloredlogs
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
@@ -183,15 +184,15 @@ def create_placeholder_avatar(
             y_draw = y
         draw.text((x, y_draw), text, fill=(255, 255, 255, 255), font=font)
         img.save(image_path)
-        print(f"已创建占位头像图片: {image_path}")
+        logger.info(f"已创建占位头像图片: {image_path}")
     except Exception as e:
-        print(f"为 {image_path} 创建占位头像图片失败: {e}")
+        logger.error(f"为 {image_path} 创建占位头像图片失败: {e}")
 
 
 def scan_and_update_available_emotions(assets_path: str):
     global available_emotions_global
     if not os.path.isdir(assets_path):
-        print(
+        logger.error(
             f"错误: 资源路径 {assets_path} 不是一个有效的目录。情绪列表将使用默认值。"
         )
         available_emotions_global = ["default"]
@@ -203,12 +204,12 @@ def scan_and_update_available_emotions(assets_path: str):
     if not found_emotions:
         found_emotions.add("default")
     if "default" not in found_emotions:
-        print(f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加。")
+        logger.warning(f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加。")
         found_emotions.add("default")
     available_emotions_global = sorted(list(found_emotions))
     if not available_emotions_global:
         available_emotions_global = ["default"]
-    print(f"可用的情绪列表已更新: {available_emotions_global}")
+    logger.info(f"可用的情绪列表已更新: {available_emotions_global}")
 
 
 def setup_environment_and_config() -> bool:
@@ -223,7 +224,7 @@ def setup_environment_and_config() -> bool:
     config_file_relative_path = os.path.join("config", "settings.ini")
     actual_config_file_path = os.path.join(project_root, config_file_relative_path)
     if not os.path.exists(actual_config_file_path):
-        print(f"警告：配置文件 {actual_config_file_path} 不存在。将创建一个模板。")
+        logger.warning(f"配置文件 {actual_config_file_path} 不存在。将创建一个模板。")
         try:
             with open(actual_config_file_path, "w", encoding="utf-8") as cf:
                 cf.write("; Default settings.ini content\n")
@@ -290,7 +291,7 @@ def setup_environment_and_config() -> bool:
         assets_path_global, initial_image_filename
     )
     if not os.path.exists(initial_pet_image_abs_path):
-        print(f"警告：初始Bot图片 {initial_pet_image_abs_path} 不存在。创建占位图。")
+        logger.warning(f"初始Bot图片 {initial_pet_image_abs_path} 不存在。创建占位图。")
         create_placeholder_avatar(initial_pet_image_abs_path, "Pet", size=(120, 120))
         if (
             initial_image_filename.lower() == "default.png"
@@ -326,7 +327,7 @@ async def initialize_async_services():
     global config_manager_global, prompt_builder_global, gemini_client_global, mongo_handler_global, hippocampus_manager_global
     global available_emotions_global
     if not config_manager_global:
-        print(
+        logger.critical(
             "CRITICAL: ConfigManager not initialized before initialize_async_services."
         )
         return False
@@ -348,7 +349,7 @@ async def initialize_async_services():
                 "MongoDB连接警告",
                 "无法连接到MongoDB或数据库不可用。聊天记录和记忆系统功能将受限。",
             )
-            print(
+            logger.error(
                 "ERROR: MongoDB connection failed or DB not accessible after MongoHandler instantiation."
             )
             if not mongo_handler_global.is_connected():
@@ -359,14 +360,14 @@ async def initialize_async_services():
             "MongoDB初始化严重错误",
             f"初始化 MongoDB 时发生严重错误: {e}。\n程序将无法正常运行。",
         )
-        print(f"CRITICAL ERROR: MongoDB initialization exception: {e}")
+        logger.critical(f"CRITICAL ERROR: MongoDB initialization exception: {e}")
         import traceback
 
         traceback.print_exc()
         mongo_handler_global = None
         mongo_ok = False
     if not mongo_ok:
-        print(
+        logger.critical(
             "CRITICAL: MongoDB initialization failed. Aborting service initialization."
         )
         return False
@@ -383,15 +384,15 @@ async def initialize_async_services():
                 "API Key 错误",
                 "请在 config/settings.ini 中配置主聊天 Gemini API Key。",
             )
-            print("CRITICAL ERROR: Gemini API Key missing or placeholder.")
+            logger.critical("CRITICAL ERROR: Gemini API Key missing or placeholder.")
         else:
             if not prompt_builder_global:
-                print(
+                logger.critical(
                     "CRITICAL ERROR: PromptBuilder not initialized before GeminiClient."
                 )
                 return False
             if not mongo_handler_global:
-                print(
+                logger.critical(
                     "CRITICAL ERROR: MongoHandler not initialized before GeminiClient (but mongo_ok was true, this is an inconsistency)."
                 )
                 return False
@@ -409,19 +410,19 @@ async def initialize_async_services():
             gemini_ok = True
     except Exception as e:
         QMessageBox.critical(None, "Gemini客户端初始化错误", f"错误: {e}")
-        print(f"CRITICAL ERROR: Gemini client initialization exception: {e}")
+        logger.critical(f"CRITICAL ERROR: Gemini client initialization exception: {e}")
         import traceback
 
         traceback.print_exc()
         gemini_client_global = None
         gemini_ok = False
     if not gemini_ok:
-        print(
+        logger.critical(
             "CRITICAL: Gemini client initialization failed. Aborting service initialization."
         )
         return False
     if HippocampusManager is None or MemoryConfig is None:
-        print(
+        logger.warning(
             "WARNING: HippocampusManager or MemoryConfig was not imported, skipping its initialization."
         )
     elif mongo_handler_global and (mongo_handler_global.get_database() is not None):
@@ -431,8 +432,14 @@ async def initialize_async_services():
             pet_name_for_hippocampus = config_manager_global.get_pet_name()
             hippocampus_manager_global = await HippocampusManager.get_instance()
             if not prompt_builder_global:
+                logger.critical(
+                    "CRITICAL: PromptBuilder is None before Hippocampus init, cannot proceed."
+                )
                 return False
             if not hippocampus_manager_global:
+                logger.critical(
+                    "CRITICAL: HippocampusManager.get_instance() returned None, cannot proceed."
+                )
                 return False
             await hippocampus_manager_global.initialize_singleton(
                 memory_config=mem_config,
@@ -442,16 +449,15 @@ async def initialize_async_services():
                 global_llm_params=memory_global_llm_params,
                 prompt_builder=prompt_builder_global,
             )
-            print("记忆系统 (HippocampusManager) 初始化成功。")
+            logger.info("记忆系统 (HippocampusManager) 初始化成功。")
         except Exception as e:
             QMessageBox.warning(
                 None,
                 "记忆系统初始化警告",
                 f"初始化记忆系统时发生错误: {e}\n记忆功能可能不可用。",
             )
-            print(
+            logger.error(
                 f"ERROR: Memory system (HippocampusManager) initialization failed: {e}",
-                file=sys.stderr,
             )
             import traceback
 
@@ -461,7 +467,7 @@ async def initialize_async_services():
         QMessageBox.warning(
             None, "记忆系统跳过", "由于数据库连接失败或未初始化，记忆系统未初始化。"
         )
-        print(
+        logger.info(
             "INFO: Memory system skipped due to MongoDB issue or HippocampusManager/MemoryConfig not imported."
         )
         hippocampus_manager_global = None
@@ -512,11 +518,11 @@ def open_chat_dialog_handler():
             chat_dialog_global.chat_text_for_tts_ready.connect(
                 screen_analyzer_global.play_tts_from_chat
             )
-            print(
+            logger.info(
                 "Main: Connected chat_text_for_tts_ready to screen_analyzer.play_tts_from_chat."
             )
         else:
-            print(
+            logger.warning(
                 "Main: screen_analyzer_global is None. Cannot connect chat_text_for_tts_ready signal."
             )
     if chat_dialog_global:
@@ -579,7 +585,7 @@ def open_chat_dialog_handler():
             try:
                 chat_dialog_global.open_dialog()
             except Exception as e:
-                print(
+                logger.critical(
                     f"CRITICAL main.py: Error calling chat_dialog_global.open_dialog(): {e}"
                 )
                 import traceback
@@ -619,63 +625,65 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
                 message_text=db_text,
                 role_play_character=pet_name,
             )
-            print(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
+            logger.info(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
         else:
             mongo_handler_global.insert_screen_analysis_log_entry(
                 sender=pet_name,
                 message_text=db_text,
                 role_play_character=pet_name,
             )
-            print(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
+            logger.info(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
     elif not config_manager_global:
-        print("Main: ConfigManager 未初始化，无法保存屏幕反应。")
+        logger.warning("Main: ConfigManager 未初始化，无法保存屏幕反应。")
     elif not (mongo_handler_global and mongo_handler_global.is_connected()):
-        print("Main: MongoDB 未连接，无法保存屏幕反应。")
+        logger.warning("Main: MongoDB 未连接，无法保存屏幕反应。")
 
 
 async def run_memory_build():
     if hippocampus_manager_global and hippocampus_manager_global._initialized:
-        print("定时任务：开始构建记忆...")
+        logger.info("定时任务：开始构建记忆...")
         try:
             await hippocampus_manager_global.build_memory()
-            print("定时任务：构建记忆完成。")
+            logger.info("定时任务：构建记忆完成。")
         except Exception as e:
-            print(f"定时任务：构建记忆时发生错误: {e}")
+            logger.error(f"定时任务：构建记忆时发生错误: {e}")
     else:
-        print("定时任务：跳过构建记忆，记忆系统未初始化或未导入。")
+        logger.info("定时任务：跳过构建记忆，记忆系统未初始化或未导入。")
 
 
 async def run_memory_forget():
     if hippocampus_manager_global and hippocampus_manager_global._initialized:
-        print("定时任务：开始遗忘记忆...")
+        logger.info("定时任务：开始遗忘记忆...")
         try:
             await hippocampus_manager_global.forget_memory()
-            print("定时任务：遗忘记忆完成。")
+            logger.info("定时任务：遗忘记忆完成。")
         except Exception as e:
-            print(f"定时任务：遗忘记忆时发生错误: {e}")
+            logger.error(f"定时任务：遗忘记忆时发生错误: {e}")
     else:
-        print("定时任务：跳过遗忘记忆，记忆系统未初始化或未导入。")
+        logger.info("定时任务：跳过遗忘记忆，记忆系统未初始化或未导入。")
 
 
 async def run_memory_consolidate():
     if hippocampus_manager_global and hippocampus_manager_global._initialized:
-        print("定时任务：开始整合记忆...")
+        logger.info("定时任务：开始整合记忆...")
         try:
             await hippocampus_manager_global.consolidate_memory()
-            print("定时任务：整合记忆完成。")
+            logger.info("定时任务：整合记忆完成。")
         except Exception as e:
-            print(f"定时任务：整合记忆时发生错误: {e}")
+            logger.error(f"定时任务：整合记忆时发生错误: {e}")
     else:
-        print("定时任务：跳过整合记忆，记忆系统未初始化或未导入。")
+        logger.info("定时任务：跳过整合记忆，记忆系统未初始化或未导入。")
 
 
 def schedule_memory_tasks(app: QApplication):
     global memory_build_timer, memory_forget_timer, memory_consolidate_timer, config_manager_global
     if not hippocampus_manager_global or not hippocampus_manager_global._initialized:
-        print("记忆系统未初始化或未导入，不调度记忆维护任务。")
+        logger.info("记忆系统未初始化或未导入，不调度记忆维护任务。")
         return
     if not config_manager_global:
-        print("ConfigManager 未初始化，无法读取记忆任务间隔。使用默认值 (1h, 3h, 6h)。")
+        logger.warning(
+            "ConfigManager 未初始化，无法读取记忆任务间隔。使用默认值 (1h, 3h, 6h)。"
+        )
         build_interval_ms = 3600 * 1000
         forget_interval_ms = 10800 * 1000
         consolidate_interval_ms = 21600 * 1000
@@ -690,31 +698,31 @@ def schedule_memory_tasks(app: QApplication):
         consolidate_interval_ms = consolidate_interval_s * 1000
 
     def trigger_build():
-        print("QTimer: Build memory triggered.")
+        logger.info("QTimer: Build memory triggered.")
         future = AsyncioHelper.schedule_task(run_memory_build())
         if future:
             future.add_done_callback(
-                lambda f: print(
+                lambda f: logger.info(
                     f"Async build task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
                 )
             )
 
     def trigger_forget():
-        print("QTimer: Forget memory triggered.")
+        logger.info("QTimer: Forget memory triggered.")
         future = AsyncioHelper.schedule_task(run_memory_forget())
         if future:
             future.add_done_callback(
-                lambda f: print(
+                lambda f: logger.info(
                     f"Async forget task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
                 )
             )
 
     def trigger_consolidate():
-        print("QTimer: Consolidate memory triggered.")
+        logger.info("QTimer: Consolidate memory triggered.")
         future = AsyncioHelper.schedule_task(run_memory_consolidate())
         if future:
             future.add_done_callback(
-                lambda f: print(
+                lambda f: logger.info(
                     f"Async consolidate task completed, result/exception: {f.result() if not f.cancelled() else 'Cancelled'}"
                 )
             )
@@ -722,13 +730,13 @@ def schedule_memory_tasks(app: QApplication):
     memory_build_timer = QTimer(app)
     memory_build_timer.timeout.connect(trigger_build)
     memory_build_timer.start(build_interval_ms)
-    print(
+    logger.info(
         f"记忆构建任务已调度，每 {build_interval_s} 秒 ({build_interval_ms // (60*1000)} 分钟) 运行一次。"
     )
     memory_forget_timer = QTimer(app)
     memory_forget_timer.timeout.connect(trigger_forget)
     memory_forget_timer.start(forget_interval_ms)
-    print(
+    logger.info(
         f"记忆遗忘任务已调度，每 {forget_interval_s} 秒 ({forget_interval_ms // (60*1000)} 分钟) 运行一次。"
     )
     memory_consolidate_timer = QTimer(app)
@@ -740,6 +748,23 @@ def schedule_memory_tasks(app: QApplication):
 
 
 if __name__ == "__main__":
+    coloredlogs.install(
+        level="info",
+        fmt="%(asctime)s [%(name)s:%(lineno)d] %(levelname)s: %(message)s",
+        level_styles={
+            "debug": {"color": "cyan"},
+            "info": {"color": "green"},
+            "warning": {"color": "yellow", "bold": True},
+            "error": {"color": "red"},
+            "critical": {"color": "red", "bold": True, "background": "white"},
+        },
+        field_styles={
+            "asctime": {"color": "magenta"},
+            "levelname": {"color": "white", "bold": True},
+            "name": {"color": "blue"},
+            "lineno": {"color": "white"},
+        },
+    )
     if Image is None:
         if QApplication.instance() is None:
             _app_temp_pillow_check = QApplication(sys.argv)
@@ -880,7 +905,7 @@ if __name__ == "__main__":
     ):
         pet_name_for_history = config_manager_global.get_pet_name()
         recent_history = mongo_handler_global.get_recent_chat_history(
-            count=5, role_play_character=pet_name_for_history
+            count=1, role_play_character=pet_name_for_history
         )
         if recent_history:
             for message_doc in recent_history:

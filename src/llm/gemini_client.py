@@ -5,33 +5,18 @@ import json
 import re
 from pydantic import BaseModel, Field
 from typing import Literal, List, Dict, Any, Optional
+import logging
+from ..utils.prompt_builder import PromptBuilder
+from ..utils.config_manager import ConfigManager
 
 try:
-    from ..utils.prompt_builder import PromptBuilder
-    from ..utils.config_manager import ConfigManager
+    from ..memory_system.hippocampus_core import HippocampusManager
 except ImportError:
-
-    class PromptBuilder:
-        def __init__(self, config_manager):
-            self.config_manager = config_manager
-
-        def build_screen_analysis_prompt(self, pet_name, user_name, available_emotions):
-            return "Placeholder screen analysis prompt"
-
-    class ConfigManager:
-        def get_history_count_for_prompt(self):
-            return 10
-
-        def get_user_name(self):
-            return "User"
-
-        def get_pet_name(self):
-            return "Pet"
-
-        def get_screen_analysis_prompt(self):
-            return "分析这张关于{user_name}屏幕的图片，作为{pet_name}，你的情绪可以是{available_emotions_str}，回复必须是JSON。"
-
-
+    try:
+        from memory_system.hippocampus_core import HippocampusManager
+    except ImportError:
+        HippocampusManager = None
+logger = logging.getLogger("GeminiClient")
 EmotionTypes = str
 
 
@@ -82,16 +67,8 @@ class GeminiClient:
         self.available_emotions = sorted(list(processed_emotions))
         self.thinking_budget = thinking_budget
         if self.thinking_budget is not None:
-            if not isinstance(self.thinking_budget, int) or not (
-                0 <= self.thinking_budget <= 24576
-            ):
-                raise ValueError("thinking_budget 必须是 0 到 24576 之间的整数。")
-            if "gemini-2.5-flash" not in self.model_name.lower():
-                print(
-                    f"警告: thinking_budget ({self.thinking_budget}) 已设置，但当前模型 ('{self.model_name}') 可能不支持此功能。思考预算仅官方支持 Gemini 2.5 Flash。"
-                )
-            elif self.thinking_budget == 0:
-                print("信息: thinking_budget 设置为 0，将禁用思考过程。")
+            if self.thinking_budget == 0:
+                logger.info("信息: thinking_budget 设置为 0，将禁用思考过程。")
         self.client = None
         try:
             self.client = genai.Client(api_key=self.api_key)
@@ -102,12 +79,16 @@ class GeminiClient:
         self.enabled_tools.append(Tool(google_search=types.GoogleSearch))
         self.enabled_tools.append(Tool(code_execution=types.ToolCodeExecution))
 
-    def _build_chat_contents_for_api(self, new_user_message_text: str) -> List[str]:
+    async def _build_chat_contents_for_api(
+        self,
+        new_user_message_text: str,
+        hippocampus_manager: Optional[HippocampusManager],
+    ) -> List[str]:
         """
         为API调用构建 `contents` 列表。
         现在调用 PromptBuilder 来获取完整的提示字符串。
         """
-        unified_prompt = self.prompt_builder.build_unified_chat_prompt_string(
+        unified_prompt = await self.prompt_builder.build_unified_chat_prompt_string(
             new_user_message_text=new_user_message_text,
             pet_name=self.pet_name,
             user_name=self.user_name,
@@ -115,23 +96,29 @@ class GeminiClient:
             available_emotions=self.available_emotions,
             unified_default_emotion=self.unified_default_emotion,
             mongo_handler=self.mongo_handler,
+            hippocampus_manager=hippocampus_manager,
         )
         return [unified_prompt]
 
-    def send_message(self, message_text: str) -> Dict[str, Any]:
+    async def send_message(
+        self, message_text: str, hippocampus_manager: Optional[HippocampusManager]
+    ) -> Dict[str, Any]:
         """Sends a message using client.models.generate_content with a unified prompt string."""
         response_object = None
         try:
             if not self.client:
                 raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
-            chat_contents = self._build_chat_contents_for_api(
-                new_user_message_text=message_text
+            chat_contents = await self._build_chat_contents_for_api(
+                new_user_message_text=message_text,
+                hippocampus_manager=hippocampus_manager,
             )
             if not chat_contents or not chat_contents[0]:
                 error_msg = (
                     "Failed to construct valid unified prompt string for API call."
                 )
-                print(f"GeminiClient: Error - {error_msg}. Contents: {chat_contents}")
+                logger.error(
+                    f"GeminiClient: Error - {error_msg}. Contents: {chat_contents}"
+                )
                 return {
                     "text": "抱歉，内部构建消息时出错。",
                     "emotion": self.unified_default_emotion,
@@ -151,7 +138,7 @@ class GeminiClient:
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:
-                    print(
+                    logger.debug(
                         f"GeminiClient (Direct Pydantic from SDK) LLM Thinking: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
@@ -160,7 +147,7 @@ class GeminiClient:
             ):
                 validated_data = response_object.parsed
                 if validated_data.thinking_process:
-                    print(
+                    logger.debug(
                         f"GeminiClient (from response.parsed) LLM Thinking: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
@@ -200,7 +187,7 @@ class GeminiClient:
                         elif isinstance(candidate.content.parts[0], dict):
                             llm_output_text = candidate.content.parts[0].get("text")
                         if llm_output_text:
-                            print(
+                            logger.debug(
                                 "GeminiClient: Extracted text from response_object.candidates[0].content.parts[0].text"
                             )
                             return self._parse_llm_json_output(
@@ -210,12 +197,12 @@ class GeminiClient:
                     response_object, "Chat (Unified String Mode)"
                 )
         except Exception as e:
-            print(f"严重错误:{e}")
+            logger.error(f"严重错误:{e}", exc_info=True)
             return self._handle_general_exception(
                 e, "send_message (Unified String Mode)", response_object
             )
 
-    def send_message_with_image(
+    async def send_message_with_image(
         self, image_bytes: bytes, mime_type: str, prompt_text: str
     ) -> Dict[str, Any]:
         response_object = None
@@ -241,7 +228,7 @@ class GeminiClient:
             contents_for_vision = [
                 types.Content(role="user", parts=user_parts_for_vision)
             ]
-            print(
+            logger.debug(
                 "\n>>> [GeminiClient.send_message_with_image] PROMPT DETAILS (Multimodal Standard) <<<"
             )
             log_str = ""
@@ -261,8 +248,8 @@ class GeminiClient:
                         log_str += f"    Part {j} (text): '{text_to_log}'\n"
                     elif hasattr(part_item, "inline_data") and part_item.inline_data:
                         log_str += f"    Part {j} (inline_data): mime_type='{part_item.inline_data.mime_type}', data_length={len(part_item.inline_data.data)}\n"
-            print(log_str.strip())
-            print(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
+            logger.debug(log_str.strip())
+            logger.debug(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
             vision_config_args = {"temperature": 0.75, "tools": self.enabled_tools}
             vision_config_args["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=self.thinking_budget
@@ -276,7 +263,7 @@ class GeminiClient:
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:
-                    print(
+                    logger.debug(
                         f"GeminiClient (Image Direct Pydantic) LLM Thinking: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
@@ -285,7 +272,7 @@ class GeminiClient:
             ):
                 validated_data = response_object.parsed
                 if validated_data.thinking_process:
-                    print(
+                    logger.debug(
                         f"GeminiClient (Image from response.parsed) LLM Thinking: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
@@ -325,7 +312,7 @@ class GeminiClient:
                         elif isinstance(candidate.content.parts[0], dict):
                             llm_output_text = candidate.content.parts[0].get("text")
                         if llm_output_text:
-                            print(
+                            logger.debug(
                                 "GeminiClient (Image): Extracted text from response_object.candidates[0].content.parts[0].text"
                             )
                             return self._parse_llm_json_output(
@@ -335,6 +322,7 @@ class GeminiClient:
                     response_object, "Image Analysis (Multimodal Standard)"
                 )
         except Exception as e:
+            logger.error(f"Error in send_message_with_image: {e}", exc_info=True)
             return self._handle_general_exception(
                 e, "send_message_with_image (Multimodal Standard)", response_object
             )
@@ -353,7 +341,7 @@ class GeminiClient:
             parsed_data = json.loads(llm_output_text)
             validated_data = PetResponseSchema(**parsed_data)
             if validated_data.thinking_process:
-                print(
+                logger.debug(
                     f"GeminiClient (Parsed from text) LLM Thinking: {validated_data.thinking_process}"
                 )
             return validated_data.model_dump()
@@ -361,6 +349,9 @@ class GeminiClient:
             fallback_text = llm_output_text if llm_output_text else "我好像有点混乱..."
             feedback_info = self._get_prompt_feedback_info(raw_response_object)
             thinking = f"<think>JSONDecodeError: {e_json}. Raw text after regex: '{llm_output_text}'. Original raw response text (if available): '{getattr(raw_response_object, 'text', 'N/A')}'. Feedback: {feedback_info}</think>"
+            logger.warning(
+                f"JSONDecodeError parsing LLM output: {e_json}. Raw text: '{llm_output_text}'. Thinking: {thinking}"
+            )
             if "BlockReason=" in feedback_info and not any(
                 reason in feedback_info.upper()
                 for reason in ["NONE", "UNSPECIFIED", "STOP"]
@@ -378,6 +369,9 @@ class GeminiClient:
         except Exception as e_val:
             feedback_info = self._get_prompt_feedback_info(raw_response_object)
             thinking = f"<think>Validation Error (e.g., Pydantic): {e_val}. Raw text used for parsing: '{llm_output_text}'. Feedback: {feedback_info}</think>"
+            logger.warning(
+                f"Validation error processing LLM output: {e_val}. Raw text: '{llm_output_text}'. Thinking: {thinking}"
+            )
             return {
                 "text": f"我说的话可能有点奇怪... (原始文本: {llm_output_text[:100]})",
                 "emotion": (
@@ -394,7 +388,7 @@ class GeminiClient:
         raw_response_snippet = str(response_object)[:200] if response_object else "None"
         prompt_feedback_info = self._get_prompt_feedback_info(response_object)
         thinking_on_error = f"<think>{context_str} response was not PetResponseSchema instance and no text/parsed found. Snippet: {raw_response_snippet}. {prompt_feedback_info}</think>"
-        print(f"Error: {context_str} LLM output issue. {thinking_on_error}")
+        logger.error(f"Error: {context_str} LLM output issue. {thinking_on_error}")
         error_text = f"抱歉，我好像没能生成有效的{context_str}回复。"
         if "BlockReason=" in prompt_feedback_info:
             block_reason_match = re.search(
@@ -521,8 +515,9 @@ class GeminiClient:
             error_message = (
                 f"抱歉，系统有点忙（可能达到配额/速率限制），请稍后再试 ({context})。"
             )
-        print(
-            f"Error in {context}: {error_message}\nOriginal Exception details ({type(e).__name__}): {details_from_exception}\nThinking: {thinking_on_error}"
+        logger.error(
+            f"Error in {context}: {error_message}\nOriginal Exception details ({type(e).__name__}): {details_from_exception}\nThinking: {thinking_on_error}",
+            exc_info=True,
         )
         return {
             "text": error_message,

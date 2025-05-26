@@ -1,5 +1,8 @@
 import configparser
 import os
+import logging
+
+logger = logging.getLogger("ConfigManager")
 
 
 class ConfigManager:
@@ -35,7 +38,7 @@ class ConfigManager:
                     f"配置文件 {actual_config_path} (或备用路径 {actual_config_path_alt}) 未找到。请确保路径正确，或脚本从项目根目录运行。"
                 )
         self.config.read(actual_config_path, encoding="utf-8")
-        print(f"ConfigManager: 成功加载配置文件 {actual_config_path}")
+        logger.info(f"ConfigManager: 成功加载配置文件 {actual_config_path}")
         self.project_root = project_root_dir
 
     def get_gemini_api_key(self):
@@ -340,7 +343,7 @@ class ConfigManager:
             model_config = dict(self.config.items(section_name))
             return model_config
         else:
-            print(
+            logger.warning(
                 f"警告: 记忆系统 LLM 昵称 '{nickname}' (来自 {nickname_key}) "
                 f"在配置文件中未找到对应的详细配置段 [{section_name}]。"
             )

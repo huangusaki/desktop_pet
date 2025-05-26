@@ -3,6 +3,9 @@ from PyQt6.QtGui import QPixmap, QMouseEvent, QGuiApplication, QAction, QActionG
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QTimer
 import os
 from typing import List
+import logging
+
+logger = logging.getLogger("MainWindow")
 
 
 class PetWindow(QWidget):
@@ -73,6 +76,9 @@ class PetWindow(QWidget):
         try:
             screen = QGuiApplication.primaryScreen()
             if not screen:
+                logger.warning(
+                    "Primary screen not found for auto-alignment. Using default position."
+                )
                 self.move(800, 600)
                 return
             available_geometry = screen.availableGeometry()
@@ -83,7 +89,7 @@ class PetWindow(QWidget):
             new_y = max(available_geometry.top(), new_y) + 1
             self.move(new_x, new_y)
         except Exception as e:
-            print(f"PetWindow: 自动对齐时出错: {e}. 使用默认定位。")
+            logger.error(f"自动对齐时出错: {e}. 使用默认定位。", exc_info=True)
             self.move(800, 600)
 
     def update_speech_and_emotion(self, text: str, emotion: str):
@@ -95,6 +101,7 @@ class PetWindow(QWidget):
             emotion_name = "default"
         self.current_emotion = emotion_name.lower()
         raw_pixmap = None
+        actual_image_path_used_for_raw_pixmap = None
         if initial_image_path_override:
             target_image_path = initial_image_path_override
         else:
@@ -103,20 +110,47 @@ class PetWindow(QWidget):
             )
         if target_image_path in self.pixmap_cache:
             raw_pixmap = self.pixmap_cache[target_image_path]
+            actual_image_path_used_for_raw_pixmap = target_image_path
         elif os.path.exists(target_image_path):
             pixmap = QPixmap(target_image_path)
             if not pixmap.isNull():
                 self.pixmap_cache[target_image_path] = pixmap
                 raw_pixmap = pixmap
+                actual_image_path_used_for_raw_pixmap = target_image_path
+            else:
+                logger.warning(
+                    f"Failed to load pixmap for emotion '{self.current_emotion}' from path: {target_image_path}"
+                )
+        else:
+            logger.warning(
+                f"Image path for emotion '{self.current_emotion}' does not exist: {target_image_path}"
+            )
         if raw_pixmap is None and self.current_emotion != "default":
-            default_image_path = os.path.join(self.assets_base_path, "default.png")
-            if default_image_path in self.pixmap_cache:
-                raw_pixmap = self.pixmap_cache[default_image_path]
-            elif os.path.exists(default_image_path):
-                pixmap = QPixmap(default_image_path)
+            logger.debug(
+                f"Emotion '{self.current_emotion}' image not found, trying 'default'."
+            )
+            default_image_path_for_fallback = os.path.join(
+                self.assets_base_path, "default.png"
+            )
+            if default_image_path_for_fallback in self.pixmap_cache:
+                raw_pixmap = self.pixmap_cache[default_image_path_for_fallback]
+                actual_image_path_used_for_raw_pixmap = default_image_path_for_fallback
+            elif os.path.exists(default_image_path_for_fallback):
+                pixmap = QPixmap(default_image_path_for_fallback)
                 if not pixmap.isNull():
-                    self.pixmap_cache[default_image_path] = pixmap
+                    self.pixmap_cache[default_image_path_for_fallback] = pixmap
                     raw_pixmap = pixmap
+                    actual_image_path_used_for_raw_pixmap = (
+                        default_image_path_for_fallback
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to load default pixmap from path: {default_image_path_for_fallback}"
+                    )
+            else:
+                logger.warning(
+                    f"Default image path does not exist: {default_image_path_for_fallback}"
+                )
         scaled_pixmap = None
         if raw_pixmap and not raw_pixmap.isNull():
             try:
@@ -135,12 +169,14 @@ class PetWindow(QWidget):
                 min_w, max_w = 80, 200
             target_width = screen_width // base_divisor
             target_width = max(min_w, min(target_width, max_w))
-            cache_key_path = (
-                initial_image_path_override
-                if initial_image_path_override
-                else target_image_path
-            )
-            cache_key = (cache_key_path, target_width)
+            if actual_image_path_used_for_raw_pixmap is None:
+                logger.error(
+                    f"No valid image path was used to load raw_pixmap for emotion {self.current_emotion}. Cannot create cache key."
+                )
+                self._set_error_text(f"图片路径错误\nEm: {self.current_emotion}")
+                return
+            cache_key_path_for_scaled = actual_image_path_used_for_raw_pixmap
+            cache_key = (cache_key_path_for_scaled, target_width)
             if cache_key in self.scaled_pixmap_cache:
                 scaled_pixmap = self.scaled_pixmap_cache[cache_key]
             else:
@@ -158,8 +194,14 @@ class PetWindow(QWidget):
                         )
                         self.scaled_pixmap_cache[cache_key] = scaled_pixmap
                     else:
+                        logger.warning(
+                            f"Calculated target dimensions are invalid for scaling: w={target_width}, h={target_height}"
+                        )
                         scaled_pixmap = raw_pixmap
                 else:
+                    logger.warning(
+                        f"Raw pixmap dimensions are invalid for scaling: w={original_width}, h={original_height}"
+                    )
                     scaled_pixmap = raw_pixmap
         if scaled_pixmap and not scaled_pixmap.isNull():
             self.image_label.setPixmap(scaled_pixmap)
@@ -173,6 +215,9 @@ class PetWindow(QWidget):
             self.adjustSize()
         else:
             self._set_error_text(f"图片丢失\nEm: {self.current_emotion}")
+            logger.error(
+                f"Failed to set emotion '{self.current_emotion}'. Scaled pixmap was null or invalid."
+            )
             return
 
     def set_speech_text(self, text: str):
