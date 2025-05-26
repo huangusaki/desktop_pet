@@ -59,6 +59,7 @@ class GeminiClient:
         prompt_builder: PromptBuilder,
         mongo_handler: Any,
         config_manager: ConfigManager,
+        thinking_budget: Optional[int] = 24000,
     ):
         if not api_key or api_key == "YOUR_API_KEY_HERE":
             raise ValueError("Gemini API Key 未在配置文件中设置或无效。")
@@ -79,6 +80,18 @@ class GeminiClient:
         if self.unified_default_emotion not in processed_emotions:
             processed_emotions.add(self.unified_default_emotion)
         self.available_emotions = sorted(list(processed_emotions))
+        self.thinking_budget = thinking_budget
+        if self.thinking_budget is not None:
+            if not isinstance(self.thinking_budget, int) or not (
+                0 <= self.thinking_budget <= 24576
+            ):
+                raise ValueError("thinking_budget 必须是 0 到 24576 之间的整数。")
+            if "gemini-2.5-flash" not in self.model_name.lower():
+                print(
+                    f"警告: thinking_budget ({self.thinking_budget}) 已设置，但当前模型 ('{self.model_name}') 可能不支持此功能。思考预算仅官方支持 Gemini 2.5 Flash。"
+                )
+            elif self.thinking_budget == 0:
+                print("信息: thinking_budget 设置为 0，将禁用思考过程。")
         self.client = None
         try:
             self.client = genai.Client(api_key=self.api_key)
@@ -124,7 +137,13 @@ class GeminiClient:
                     "emotion": self.unified_default_emotion,
                     "thinking_process": f"<think>Error: {error_msg}</think>",
                 }
-            generation_config_args = {"temperature": 0.75, "tools": self.enabled_tools}
+            generation_config_args = {
+                "temperature": 0.75,
+                "tools": self.enabled_tools,
+            }
+            generation_config_args["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=self.thinking_budget
+            )
             api_config = types.GenerateContentConfig(**generation_config_args)
             response_object = self.client.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
@@ -244,7 +263,10 @@ class GeminiClient:
                         log_str += f"    Part {j} (inline_data): mime_type='{part_item.inline_data.mime_type}', data_length={len(part_item.inline_data.data)}\n"
             print(log_str.strip())
             print(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
-            vision_config_args = {"temperature": 0.80, "tools": self.enabled_tools}
+            vision_config_args = {"temperature": 0.75, "tools": self.enabled_tools}
+            vision_config_args["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=self.thinking_budget
+            )
             api_vision_config = types.GenerateContentConfig(**vision_config_args)
             response_object = self.client.models.generate_content(
                 model=self.model_name,
@@ -456,10 +478,10 @@ class GeminiClient:
         details_from_exception = str(e)
         thinking_on_error = f"<think>General Exception in {context}: {type(e).__name__} - {details_from_exception}."
         feedback_str = ""
-        if isinstance(e, (types.BlockedPromptException, types.StopCandidateException)):
-            feedback_str = self._get_prompt_feedback_info(e)
-        elif raw_response_object:
+        if raw_response_object:
             feedback_str = self._get_prompt_feedback_info(raw_response_object)
+        elif hasattr(e, "response") and e.response:
+            feedback_str = self._get_prompt_feedback_info(getattr(e, "response", None))
         if feedback_str and feedback_str not in [
             "Prompt Feedback: (No specific feedback attributes found in response_obj)",
             "Prompt Feedback: (No response object)",

@@ -17,7 +17,9 @@ from src.memory_system.memory_config import MemoryConfig
 from src.memory_system.hippocampus_core import HippocampusManager
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Optional, Dict, Any
+import logging
 
+logger = logging.getLogger("main")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 config_manager_global: Optional[ConfigManager] = None
@@ -60,7 +62,7 @@ class AsyncioHelper:
     @staticmethod
     def _run_loop():
         if AsyncioHelper._loop is None:
-            print("ERROR Main: _run_loop called with _loop as None")
+            logger.error("ERROR Main: _run_loop called with _loop as None")
             return
         asyncio.set_event_loop(AsyncioHelper._loop)
         if AsyncioHelper._is_running_event:
@@ -68,7 +70,9 @@ class AsyncioHelper:
         try:
             AsyncioHelper._loop.run_forever()
         except Exception as e:
-            print(f"ERROR Main: Asyncio loop in thread encountered an error: {e}")
+            logger.error(
+                f"ERROR Main: Asyncio loop in thread encountered an error: {e}"
+            )
         finally:
             if hasattr(AsyncioHelper._loop, "shutdown_asyncgens"):
                 AsyncioHelper._loop.run_until_complete(
@@ -103,7 +107,7 @@ class AsyncioHelper:
         if AsyncioHelper._thread and AsyncioHelper._thread.is_alive():
             AsyncioHelper._thread.join(timeout=5)
             if AsyncioHelper._thread.is_alive():
-                print(
+                logger.warning(
                     "WARNING Main: Asyncio thread did not stop gracefully after 5 seconds."
                 )
         AsyncioHelper._loop = None
@@ -116,18 +120,18 @@ class AsyncioHelper:
             future = asyncio.run_coroutine_threadsafe(coro, AsyncioHelper._loop)
             return future
         else:
-            print(
+            logger.error(
                 "ERROR Main: Asyncio loop not running or not initialized. Cannot schedule task."
             )
             if AsyncioHelper._loop is None:
-                print(
+                logger.warning(
                     "WARNING Main: Attempting to restart asyncio loop for task scheduling."
                 )
                 AsyncioHelper.start_asyncio_loop()
                 if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
                     future = asyncio.run_coroutine_threadsafe(coro, AsyncioHelper._loop)
                     return future
-            print(
+            logger.error(
                 "ERROR Main: Failed to schedule task even after attempting loop restart."
             )
             return None
@@ -137,7 +141,9 @@ def create_placeholder_avatar(
     image_path: str, text: str, size=(64, 64), bg_color=(128, 128, 128, 200)
 ):
     if not Image or not ImageDraw or not ImageFont:
-        print(f"Pillow not available, cannot create placeholder for {image_path}")
+        logger.warning(
+            f"Pillow not available, cannot create placeholder for {image_path}"
+        )
         return
     try:
         os.makedirs(os.path.dirname(image_path), exist_ok=True)
@@ -502,6 +508,17 @@ def open_chat_dialog_handler():
             chat_dialog_global.speech_and_emotion_received.connect(
                 pet_window_global.update_speech_and_emotion
             )
+        if screen_analyzer_global:
+            chat_dialog_global.chat_text_for_tts_ready.connect(
+                screen_analyzer_global.play_tts_from_chat
+            )
+            print(
+                "Main: Connected chat_text_for_tts_ready to screen_analyzer.play_tts_from_chat."
+            )
+        else:
+            print(
+                "Main: screen_analyzer_global is None. Cannot connect chat_text_for_tts_ready signal."
+            )
     if chat_dialog_global:
         if chat_dialog_global.isHidden():
             if pet_window_global:
@@ -653,10 +670,24 @@ async def run_memory_consolidate():
 
 
 def schedule_memory_tasks(app: QApplication):
-    global memory_build_timer, memory_forget_timer, memory_consolidate_timer
+    global memory_build_timer, memory_forget_timer, memory_consolidate_timer, config_manager_global
     if not hippocampus_manager_global or not hippocampus_manager_global._initialized:
         print("记忆系统未初始化或未导入，不调度记忆维护任务。")
         return
+    if not config_manager_global:
+        print("ConfigManager 未初始化，无法读取记忆任务间隔。使用默认值 (1h, 3h, 6h)。")
+        build_interval_ms = 3600 * 1000
+        forget_interval_ms = 10800 * 1000
+        consolidate_interval_ms = 21600 * 1000
+    else:
+        build_interval_s = config_manager_global.get_memory_build_interval_seconds()
+        forget_interval_s = config_manager_global.get_memory_forget_interval_seconds()
+        consolidate_interval_s = (
+            config_manager_global.get_memory_consolidate_interval_seconds()
+        )
+        build_interval_ms = build_interval_s * 1000
+        forget_interval_ms = forget_interval_s * 1000
+        consolidate_interval_ms = consolidate_interval_s * 1000
 
     def trigger_build():
         print("QTimer: Build memory triggered.")
@@ -690,19 +721,21 @@ def schedule_memory_tasks(app: QApplication):
 
     memory_build_timer = QTimer(app)
     memory_build_timer.timeout.connect(trigger_build)
-    memory_build_timer.start(MEMORY_BUILD_INTERVAL)
-    print(f"记忆构建任务已调度，每 {MEMORY_BUILD_INTERVAL // (60*1000)} 分钟运行一次。")
+    memory_build_timer.start(build_interval_ms)
+    print(
+        f"记忆构建任务已调度，每 {build_interval_s} 秒 ({build_interval_ms // (60*1000)} 分钟) 运行一次。"
+    )
     memory_forget_timer = QTimer(app)
     memory_forget_timer.timeout.connect(trigger_forget)
-    memory_forget_timer.start(MEMORY_FORGET_INTERVAL)
+    memory_forget_timer.start(forget_interval_ms)
     print(
-        f"记忆遗忘任务已调度，每 {MEMORY_FORGET_INTERVAL // (60*1000)} 分钟运行一次。"
+        f"记忆遗忘任务已调度，每 {forget_interval_s} 秒 ({forget_interval_ms // (60*1000)} 分钟) 运行一次。"
     )
     memory_consolidate_timer = QTimer(app)
     memory_consolidate_timer.timeout.connect(trigger_consolidate)
-    memory_consolidate_timer.start(MEMORY_CONSOLIDATE_INTERVAL)
-    print(
-        f"记忆整合任务已调度，每 {MEMORY_CONSOLIDATE_INTERVAL // (60*1000)} 分钟运行一次。"
+    memory_consolidate_timer.start(consolidate_interval_ms)
+    logger.info(
+        f"记忆整合任务已调度，每 {consolidate_interval_s} 秒 ({consolidate_interval_ms // (60*1000)} 分钟) 运行一次。"
     )
 
 
@@ -728,7 +761,7 @@ if __name__ == "__main__":
             try:
                 return await initialize_async_services()
             except Exception as e:
-                print(
+                logger.error(
                     f"CRITICAL ERROR: Exception during initialize_async_services execution: {e}"
                 )
                 import traceback
@@ -741,20 +774,24 @@ if __name__ == "__main__":
             try:
                 initialization_succeeded = init_future_concurrent.result(timeout=60)
             except asyncio.TimeoutError:
-                print(
+                logger.error(
                     "CRITICAL ERROR: initialize_async_services timed out after 60 seconds."
                 )
                 initialization_succeeded = False
             except Exception as e:
-                print(
+                logger.error(
                     f"CRITICAL ERROR: Waiting for initialize_async_services future failed: {e}"
                 )
                 initialization_succeeded = False
         else:
-            print("ERROR Main: Failed to schedule initialize_async_services task.")
+            logger.error(
+                "ERROR Main: Failed to schedule initialize_async_services task."
+            )
             initialization_succeeded = False
     else:
-        print("CRITICAL ERROR: AsyncioHelper loop not available for initialization.")
+        logger.error(
+            "CRITICAL ERROR: AsyncioHelper loop not available for initialization."
+        )
         initialization_succeeded = False
     if not initialization_succeeded:
         QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
@@ -776,12 +813,23 @@ if __name__ == "__main__":
         available_emotions=available_emotions_global,
     )
     pet_window_global.request_open_chat_dialog.connect(open_chat_dialog_handler)
+    tts_globally_enabled_main = False
+    screen_analysis_feature_enabled_main = False
+    if config_manager_global:
+        tts_globally_enabled_main = config_manager_global.get_tts_enabled()
+        screen_analysis_feature_enabled_main = (
+            config_manager_global.get_screen_analysis_enabled()
+        )
+    else:
+        logger.warning(
+            "CRITICAL main.py: config_manager_global is None before ScreenAnalyzer init logic. This should not happen."
+        )
     if (
         gemini_client_global
         and config_manager_global
         and prompt_builder_global
         and pet_window_global
-        and config_manager_global.get_screen_analysis_enabled()
+        and (tts_globally_enabled_main or screen_analysis_feature_enabled_main)
     ):
         user_name_for_analyzer = config_manager_global.get_user_name()
         screen_analyzer_global = ScreenAnalyzer(
@@ -794,14 +842,36 @@ if __name__ == "__main__":
             available_emotions=available_emotions_global,
             parent=app,
         )
-        screen_analyzer_global.pet_reaction_ready.connect(
-            handle_screen_analysis_reaction
-        )
-        screen_analyzer_global.start_monitoring()
+        if screen_analysis_feature_enabled_main:
+            screen_analyzer_global.pet_reaction_ready.connect(
+                handle_screen_analysis_reaction
+            )
+            screen_analyzer_global.start_monitoring()
+            logger.info(
+                "INFO Main: Screen analyzer monitoring started (feature enabled)."
+            )
+        else:
+            logger.info(
+                "INFO Main: Screen analyzer initialized for TTS, but screen monitoring feature is disabled."
+            )
     else:
-        print(
-            "INFO Main: Screen analyzer not started (disabled or dependencies missing)."
-        )
+        if not (tts_globally_enabled_main or screen_analysis_feature_enabled_main):
+            logger.info(
+                "INFO Main: Screen analyzer not started (both TTS and Screen Analysis feature are disabled, or core dependencies missing)."
+            )
+        elif not (
+            gemini_client_global
+            and config_manager_global
+            and prompt_builder_global
+            and pet_window_global
+        ):
+            logger.info(
+                "INFO Main: Screen analyzer not started (core dependencies like Gemini, Config, PromptBuilder, or PetWindow missing, though TTS or Screen Analysis was requested)."
+            )
+        else:
+            logger.info(
+                "INFO Main: Screen analyzer not started (unknown reason, check dependencies and enabled flags)."
+            )
     initial_pet_message_text = "你好！我在这里哦！"
     if (
         mongo_handler_global
@@ -826,16 +896,16 @@ if __name__ == "__main__":
     AsyncioHelper.stop_asyncio_loop()
     if screen_analyzer_global:
         screen_analyzer_global.stop_monitoring()
-        print("ScreenAnalyzer监控已停止。")
+        logger.info("ScreenAnalyzer监控已停止。")
     if mongo_handler_global:
         mongo_handler_global.close_connection()
-        print("Main: MongoDB连接已请求关闭。")
+        logger.info("Main: MongoDB连接已请求关闭。")
     if memory_build_timer and memory_build_timer.isActive():
         memory_build_timer.stop()
     if memory_forget_timer and memory_forget_timer.isActive():
         memory_forget_timer.stop()
     if memory_consolidate_timer and memory_consolidate_timer.isActive():
         memory_consolidate_timer.stop()
-    print("记忆维护任务定时器已停止。")
-    print(f"应用程序退出，退出代码: {exit_code}")
+    logger.info("记忆维护任务定时器已停止。")
+    logger.info(f"应用程序退出，退出代码: {exit_code}")
     sys.exit(exit_code)

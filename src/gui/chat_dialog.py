@@ -62,6 +62,7 @@ class AsyncRunner(QObject):
 class ChatDialog(QDialog):
     dialog_closed = pyqtSignal()
     speech_and_emotion_received = pyqtSignal(str, str)
+    chat_text_for_tts_ready = pyqtSignal(str)
 
     def __init__(
         self,
@@ -311,12 +312,10 @@ class ChatDialog(QDialog):
                 if memories:
                     formatted_mems = []
                     for topic, summary in memories:
-                        formatted_mems.append(
-                            f"相关记忆片段 (主题: {topic}): {summary}"
-                        )
+                        formatted_mems.append(f"{topic}: {summary}")
                     if formatted_mems:
                         retrieved_memories_text = (
-                            "参考以下可能相关的记忆片段来更好地回应：\n"
+                            "\n\n以下过去发生过的事可能跟对话有关系，你需要参考一下：\n"
                             + "\n".join(formatted_mems)
                             + "\n\n"
                         )
@@ -336,6 +335,9 @@ class ChatDialog(QDialog):
         current_thread = current_runner.thread() if current_runner else None
         pet_text = response_data.get("text", "我好像不知道该说什么了...")
         pet_emotion = response_data.get("emotion", "default")
+        text_japanese = response_data.get("text_japanese")
+        if text_japanese and text_japanese.strip():
+            self.chat_text_for_tts_ready.emit(text_japanese)
         if self.mongo_handler and self.mongo_handler.is_connected():
             actual_pet_name = self.config_manager.get_pet_name()
             self.mongo_handler.insert_chat_message(

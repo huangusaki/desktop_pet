@@ -3,19 +3,14 @@ import os
 import random
 import asyncio
 import tempfile
+import collections
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer, QUrl, pyqtSlot
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from ..utils.prompt_builder import PromptBuilder
 from ..utils.tts_request_worker import TTSRequestWorker
-
-try:
-    from PIL import ImageGrab, Image
-except ImportError:
-    print("Pillow library not found, screen analysis might not work as expected.")
-    ImageGrab = None
-    Image = None
+from PIL import ImageGrab, Image
 
 
 class ScreenAnalysisWorker(QObject):
@@ -48,15 +43,11 @@ class ScreenAnalysisWorker(QObject):
     def start_screenshot_sequence(self):
         if not self._is_running:
             return
-        print(f"ScreenAnalysisWorker ({id(self)}): Requesting GUI hide for screenshot.")
         self.request_gui_hide_before_grab.emit()
 
     @pyqtSlot()
     def _trigger_async_grab_and_process(self):
         worker_id = id(self)
-        print(
-            f"ScreenAnalysisWorker ({worker_id}): GUI is ready, starting async grab and process."
-        )
         loop: Optional[asyncio.AbstractEventLoop] = None
         try:
             try:
@@ -75,86 +66,51 @@ class ScreenAnalysisWorker(QObject):
                     fut.result()
                 except Exception as e:
                     if self._is_running:
-                        print(
-                            f"ScreenAnalysisWorker ({worker_id}): Async task error: {e}"
-                        )
                         self.error_occurred.emit(
                             f"ScreenAnalysisWorker: Async task error: {e}"
                         )
                 finally:
                     if loop and loop.is_running():
-                        print(
-                            f"ScreenAnalysisWorker ({worker_id}): Stopping asyncio loop from task_done_callback."
-                        )
                         loop.stop()
-                    print(
-                        f"ScreenAnalysisWorker ({worker_id}): Asyncio task and loop finished."
-                    )
 
             task.add_done_callback(task_done_callback)
             if self._is_running:
-                print(
-                    f"ScreenAnalysisWorker ({worker_id}): Starting asyncio event loop..."
-                )
                 loop.run_forever()
-                print(
-                    f"ScreenAnalysisWorker ({worker_id}): Asyncio event loop has naturally stopped."
-                )
             else:
                 if loop and loop.is_running():
                     loop.stop()
-                print(
-                    f"ScreenAnalysisWorker ({worker_id}): Worker was stopped before loop.run_forever()."
-                )
         except Exception as e:
             if self._is_running:
-                print(
-                    f"ScreenAnalysisWorker ({worker_id}): Error in _trigger_async_grab_and_process: {e}"
-                )
                 self.error_occurred.emit(
                     f"ScreenAnalysisWorker: Error in _trigger_async_grab_and_process: {e}"
                 )
             if loop and loop.is_running():
                 loop.stop()
-        print(
-            f"ScreenAnalysisWorker ({worker_id}): _trigger_async_grab_and_process method finished."
-        )
 
     async def _async_grab_and_process_llm(self):
-        worker_id = id(self)
         original_screenshot = None
         screenshot_taken_successfully = False
         try:
             if not self._is_running:
                 return
-            print(f"ScreenAnalysisWorker ({worker_id}): Checking Pillow.")
             if ImageGrab is None or Image is None:
                 self.error_occurred.emit(
                     "Pillow library is not installed for screenshot."
                 )
                 return
-            print(f"ScreenAnalysisWorker ({worker_id}): Performing ImageGrab.grab()")
             original_screenshot = await asyncio.to_thread(ImageGrab.grab)
             screenshot_taken_successfully = True
-            print(f"ScreenAnalysisWorker ({worker_id}): Screenshot taken successfully.")
         except Exception as e_grab:
             self.error_occurred.emit(f"Error during ImageGrab.grab(): {e_grab}")
         finally:
-            print(
-                f"ScreenAnalysisWorker ({worker_id}): Requesting GUI show after grab attempt."
-            )
             self.request_gui_show_after_grab.emit()
         if (
             not self._is_running
             or not screenshot_taken_successfully
             or not original_screenshot
         ):
-            print(
-                f"ScreenAnalysisWorker ({worker_id}): Bailing out early. is_running={self._is_running}, success={screenshot_taken_successfully}"
-            )
             return
         try:
-            print(f"ScreenAnalysisWorker ({worker_id}): Processing screenshot for LLM.")
             img_byte_arr = io.BytesIO()
             await asyncio.to_thread(
                 original_screenshot.save, img_byte_arr, format="JPEG", quality=75
@@ -164,22 +120,15 @@ class ScreenAnalysisWorker(QObject):
             if not self._is_running:
                 return
             user_supplementary_notes_for_image = ""
-            print(
-                f"ScreenAnalysisWorker ({worker_id}): Sending image to Gemini. Supplementary notes: '{user_supplementary_notes_for_image}'"
-            )
             response_data = await asyncio.to_thread(
                 self.gemini_client.send_message_with_image,
                 image_bytes=img_bytes,
                 mime_type=mime_type,
                 prompt_text=user_supplementary_notes_for_image,
             )
-            print(f"ScreenAnalysisWorker ({worker_id}): Gemini response received.")
             if not self._is_running:
                 return
             if response_data and "text" in response_data and "emotion" in response_data:
-                print(
-                    f"ScreenAnalysisWorker ({worker_id}): Emitting analysis_complete."
-                )
                 self.analysis_complete.emit(response_data)
             else:
                 self.error_occurred.emit(
@@ -190,9 +139,6 @@ class ScreenAnalysisWorker(QObject):
                 self.error_occurred.emit(
                     f"Error during screenshot processing or LLM call: {e_process_llm}"
                 )
-        print(
-            f"ScreenAnalysisWorker ({worker_id}): _async_grab_and_process_llm finished."
-        )
 
 
 class ScreenAnalyzer(QObject):
@@ -223,6 +169,10 @@ class ScreenAnalyzer(QObject):
         self._interval_ms = 60000
         self._analysis_chance = 0.1
         self.tts_enabled_globally = False
+        self.tts_queue = collections.deque()
+        self.is_tts_processing = False
+        self.tts_request_thread: Optional[QThread] = None
+        self.tts_request_worker: Optional[TTSRequestWorker] = None
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
@@ -234,13 +184,13 @@ class ScreenAnalyzer(QObject):
         self.timer.timeout.connect(self._check_and_analyze_wrapper)
         self.analysis_thread: Optional[QThread] = None
         self.analysis_worker: Optional[ScreenAnalysisWorker] = None
-        self.tts_request_thread: Optional[QThread] = None
-        self.tts_request_worker: Optional[TTSRequestWorker] = None
         if not (ImageGrab and Image):
             self._is_enabled = False
-            print(
-                "ScreenAnalyzer: Pillow not found, screen analysis and related TTS disabled."
-            )
+            print("ScreenAnalyzer: Pillow not found, screen analysis feature disabled.")
+            if not self.tts_enabled_globally:
+                print(
+                    "ScreenAnalyzer: Pillow not found and global TTS is disabled. ScreenAnalyzer will be largely inactive."
+                )
 
     def _load_config(self):
         self._is_enabled = self.config_manager.get_screen_analysis_enabled()
@@ -249,99 +199,67 @@ class ScreenAnalyzer(QObject):
         self._analysis_chance = self.config_manager.get_screen_analysis_chance()
         self.tts_enabled_globally = self.config_manager.get_tts_enabled()
         print(
-            f"ScreenAnalyzer Config: Enabled={self._is_enabled}, Interval={interval_seconds}s, Chance={self._analysis_chance*100}%, TTS Globally Enabled={self.tts_enabled_globally}"
+            f"ScreenAnalyzer Config: ScreenAnalysisEnabled={self._is_enabled}, Interval={interval_seconds}s, Chance={self._analysis_chance*100}%, TTS Globally Enabled={self.tts_enabled_globally}"
         )
 
     def start_monitoring(self):
         if not self._is_enabled:
-            print("ScreenAnalyzer: Monitoring not started (disabled).")
+            print(
+                "ScreenAnalyzer: Screen analysis monitoring not started (feature disabled). TTS can still be triggered by chat."
+            )
             return
         if not self.gemini_client or not self.pet_window:
             print(
-                "ScreenAnalyzer: Cannot start, Gemini client or PetWindow not available."
+                "ScreenAnalyzer: Cannot start screen analysis monitoring, Gemini client or PetWindow not available."
             )
             return
         self.timer.start(self._interval_ms)
         print(
-            f"ScreenAnalyzer: Monitoring started. Interval: {self._interval_ms / 1000}s"
+            f"ScreenAnalyzer: Screen analysis monitoring started. Interval: {self._interval_ms / 1000}s"
         )
 
     def stop_monitoring(self):
         self.timer.stop()
         print("ScreenAnalyzer: Attempting to stop monitoring and clean up threads...")
         if self.analysis_thread and self.analysis_thread.isRunning():
-            print(
-                f"ScreenAnalyzer: Stopping active analysis_worker ({id(self.analysis_worker)} if exists)."
-            )
             if self.analysis_worker:
                 self.analysis_worker.stop()
-            print(
-                f"ScreenAnalyzer: Quitting analysis_thread ({id(self.analysis_thread)})."
-            )
             self.analysis_thread.quit()
             if not self.analysis_thread.wait(3000):
-                print(
-                    "ScreenAnalyzer: Analysis worker thread did not finish gracefully, terminating."
-                )
                 self.analysis_thread.terminate()
                 self.analysis_thread.wait()
-        else:
-            self._cleanup_analysis_thread_and_worker()
+        self._cleanup_analysis_thread_and_worker()
         if self.tts_request_thread and self.tts_request_thread.isRunning():
-            print(
-                f"ScreenAnalyzer: Stopping active tts_request_worker ({id(self.tts_request_worker)} if exists)."
-            )
             if self.tts_request_worker:
                 self.tts_request_worker.stop()
-            print(
-                f"ScreenAnalyzer: Quitting tts_request_thread ({id(self.tts_request_thread)})."
-            )
             self.tts_request_thread.quit()
             if not self.tts_request_thread.wait(1000):
-                print(
-                    "ScreenAnalyzer: TTS request thread did not finish gracefully, terminating."
-                )
                 self.tts_request_thread.terminate()
                 self.tts_request_thread.wait()
-        else:
-            self._cleanup_tts_request_thread_and_worker()
-        print("ScreenAnalyzer: Monitoring stopped and cleanup attempted.")
+        self._cleanup_tts_request_thread_and_worker()
+        self.tts_queue.clear()
+        self.is_tts_processing = False
+        print(
+            "ScreenAnalyzer: Monitoring stopped, TTS queue cleared, and cleanup attempted."
+        )
 
     def _check_and_analyze_wrapper(self):
         if not self._is_enabled:
             self.timer.stop()
             return
-        thread_obj_id = id(self.analysis_thread) if self.analysis_thread else "None"
-        is_running_status = (
-            self.analysis_thread.isRunning() if self.analysis_thread else "N/A"
-        )
-        print(
-            f"ScreenAnalyzer: _check_and_analyze_wrapper: self.analysis_thread (ID: {thread_obj_id}) is {self.analysis_thread}, isRunning: {is_running_status}"
-        )
         if random.random() < self._analysis_chance:
             if self.analysis_thread and self.analysis_thread.isRunning():
                 print("ScreenAnalyzer: Screen analysis already in progress. Skipping.")
                 return
             self._initiate_analysis_sequence()
         else:
-            print(
-                f"ScreenAnalyzer: Tick - no analysis this time (chance: {self._analysis_chance*100}%)."
-            )
+            pass
 
     def _initiate_analysis_sequence(self):
         if self.analysis_thread:
-            print(
-                f"ScreenAnalyzer: INITIATE_ANALYSIS - Found existing analysis_thread (ID: {id(self.analysis_thread)}), attempting cleanup first."
-            )
             self._cleanup_analysis_thread_and_worker()
         if self.analysis_thread and self.analysis_thread.isRunning():
-            print(
-                "ScreenAnalyzer: INITIATE_ANALYSIS - Previous analysis_thread still running after cleanup attempt. Aborting new sequence."
-            )
             return
-        print(
-            "ScreenAnalyzer: INITIATE_ANALYSIS - Initiating new screen analysis sequence."
-        )
         self.analysis_worker = ScreenAnalysisWorker(
             gemini_client=self.gemini_client,
             prompt_builder=self.prompt_builder,
@@ -350,9 +268,6 @@ class ScreenAnalyzer(QObject):
             available_emotions=self.available_emotions_list,
         )
         self.analysis_thread = QThread()
-        print(
-            f"ScreenAnalyzer: INITIATE_ANALYSIS - Created new analysis_thread (ID: {id(self.analysis_thread)}) for worker (ID: {id(self.analysis_worker)})."
-        )
         self.analysis_worker.moveToThread(self.analysis_thread)
         self.analysis_worker.request_gui_hide_before_grab.connect(
             self._handle_hide_request
@@ -371,7 +286,6 @@ class ScreenAnalyzer(QObject):
 
     @pyqtSlot()
     def _handle_hide_request(self):
-        print("ScreenAnalyzer: Handling hide request. Making pet window transparent.")
         if self.pet_window:
             self._pet_was_visible_before_grab = self.pet_window.isVisible()
             if self._pet_was_visible_before_grab:
@@ -381,7 +295,6 @@ class ScreenAnalyzer(QObject):
 
     @pyqtSlot()
     def _handle_show_request(self):
-        print("ScreenAnalyzer: Handling show request. Restoring pet window opacity.")
         if self.pet_window:
             if self._pet_was_visible_before_grab:
                 self.pet_window.setWindowOpacity(1.0)
@@ -396,82 +309,111 @@ class ScreenAnalyzer(QObject):
         text_chinese = response_data.get("text", "Hmm...")
         emotion = response_data.get("emotion", "default")
         text_japanese = response_data.get("text_japanese")
-        print(
-            f"ScreenAnalyzer: LLM Response - Text (CN): '{text_chinese}', Emotion: '{emotion}', Text (JP): '{text_japanese}'"
-        )
         self.pet_reaction_ready.emit(text_chinese, emotion)
         if self.analysis_thread and self.analysis_thread.isRunning():
-            print(
-                f"ScreenAnalyzer: LLM response handled, requesting analysis_thread (ID: {id(self.analysis_thread)}) to quit."
-            )
             self.analysis_thread.quit()
         else:
-            print(
-                f"ScreenAnalyzer: LLM response handled, but analysis_thread (ID: {id(self.analysis_thread) if self.analysis_thread else 'None'}) was not running or None."
-            )
+            self._cleanup_analysis_thread_and_worker()
         if self.tts_enabled_globally:
             if text_japanese and text_japanese.strip():
-                print(
-                    f"ScreenAnalyzer: TTS globally enabled and Japanese text found. Initiating TTS for: '{text_japanese[:50]}...'"
-                )
-                self._initiate_tts_request(text_japanese)
+                self.request_tts(text_japanese, source="ScreenAnalysis")
             elif not (text_japanese and text_japanese.strip()):
                 print(
-                    "ScreenAnalyzer: TTS globally enabled, but Japanese text for TTS is missing, empty, or null. Skipping TTS for this interaction."
+                    "ScreenAnalyzer: TTS (Screen Analysis) - Japanese text is missing or empty. Skipping TTS."
                 )
         else:
             if not self.tts_enabled_globally:
-                print("ScreenAnalyzer: TTS is globally disabled.")
-            if not text_japanese:
-                print(
-                    "ScreenAnalyzer: Japanese text from LLM for TTS was not provided or was null."
-                )
+                print("ScreenAnalyzer: TTS (Screen Analysis) - Global TTS is disabled.")
 
-    def _initiate_tts_request(self, text_to_speak: str):
-        if self.tts_request_thread:
+    @pyqtSlot(str)
+    def play_tts_from_chat(self, japanese_text: str):
+        if not self.tts_enabled_globally:
+            print("ScreenAnalyzer: TTS (Chat) - Global TTS is disabled, not playing.")
+            return
+        if japanese_text and japanese_text.strip():
+            self.request_tts(japanese_text, source="ChatDialog")
+        else:
             print(
-                f"ScreenAnalyzer: INITIATE_TTS - Found existing tts_request_thread (ID: {id(self.tts_request_thread)}), attempting cleanup first."
+                "ScreenAnalyzer: TTS (Chat) - Japanese text is missing or empty, skipping."
             )
-            self._cleanup_tts_request_thread_and_worker()
-        if self.tts_request_thread and self.tts_request_thread.isRunning():
+
+    def request_tts(self, text_to_speak: str, source: str = "Unknown"):
+        if not self.tts_enabled_globally:
             print(
-                "ScreenAnalyzer: INITIATE_TTS - Previous tts_request_thread still running. Skipping new one."
+                f"ScreenAnalyzer: TTS request from {source} ignored, global TTS is disabled."
             )
             return
+        if not text_to_speak or not text_to_speak.strip():
+            print(f"ScreenAnalyzer: TTS request from {source} ignored, text is empty.")
+            return
+        self.tts_queue.append(text_to_speak)
         print(
-            f"ScreenAnalyzer: INITIATE_TTS - Initiating new TTS request for: '{text_to_speak[:50]}...'"
+            f"ScreenAnalyzer: Added TTS request from {source} to queue (size: {len(self.tts_queue)}): '{text_to_speak[:30]}...'"
+        )
+        self._try_process_next_tts_in_queue()
+
+    def _try_process_next_tts_in_queue(self):
+        if self.is_tts_processing:
+            return
+        if not self.tts_queue:
+            return
+        if not self.tts_enabled_globally:
+            self.tts_queue.clear()
+            return
+        if self.tts_request_thread and not self.tts_request_thread.isRunning():
+            self._cleanup_tts_request_thread_and_worker()
+        elif not self.tts_request_thread and self.tts_request_worker:
+            self.tts_request_worker.deleteLater()
+            self.tts_request_worker = None
+        if self.tts_request_thread and self.tts_request_thread.isRunning():
+            print(
+                "ScreenAnalyzer: WARNING - _try_process_next_tts_in_queue called while a TTS thread is unexpectedly running."
+            )
+            return
+        self.is_tts_processing = True
+        text_to_speak = self.tts_queue.popleft()
+        print(
+            f"ScreenAnalyzer: Processing next TTS from queue: '{text_to_speak[:50]}...'"
         )
         self.tts_request_worker = TTSRequestWorker(text_to_speak, self.config_manager)
         self.tts_request_thread = QThread()
-        print(
-            f"ScreenAnalyzer: INITIATE_TTS - Created new tts_request_thread (ID: {id(self.tts_request_thread)}) for worker (ID: {id(self.tts_request_worker)})."
-        )
         self.tts_request_worker.moveToThread(self.tts_request_thread)
         self.tts_request_worker.audio_ready.connect(self._handle_audio_playback)
-        self.tts_request_worker.tts_error.connect(self._handle_tts_request_error)
+        self.tts_request_worker.tts_error.connect(self._handle_tts_request_error_queued)
         self.tts_request_worker.finished.connect(
-            self._cleanup_tts_request_thread_and_worker
+            self._handle_tts_worker_finished_queued
         )
         self.tts_request_thread.started.connect(
             self.tts_request_worker.start_tts_request
         )
+        self.tts_request_thread.finished.connect(
+            self._cleanup_tts_request_thread_and_worker
+        )
         self.tts_request_thread.start()
+
+    @pyqtSlot()
+    def _handle_tts_worker_finished_queued(self):
+        print("ScreenAnalyzer: TTS worker finished task (queued).")
+        if self.tts_request_thread and self.tts_request_thread.isRunning():
+            self.tts_request_thread.quit()
+
+    @pyqtSlot(str)
+    def _handle_tts_request_error_queued(self, error_message: str):
+        print(f"ScreenAnalyzer: TTSRequestWorker Error (queued) - {error_message}")
+        if self.tts_request_thread and self.tts_request_thread.isRunning():
+            self.tts_request_thread.quit()
 
     @pyqtSlot(bytes, str)
     def _handle_audio_playback(self, audio_data: bytes, media_type: str):
-        print(
-            f"ScreenAnalyzer: Received audio data for playback (type: {media_type}). Size: {len(audio_data)} bytes."
-        )
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            print("ScreenAnalyzer: Player is already playing, stopping previous audio.")
             self.player.stop()
             if self._temp_audio_file_path and os.path.exists(
                 self._temp_audio_file_path
             ):
                 try:
                     os.remove(self._temp_audio_file_path)
-                except Exception as e:
-                    print(f"ScreenAnalyzer: Error removing previous temp file: {e}")
+                except Exception:
+                    pass
                 self._temp_audio_file_path = None
         try:
             valid_suffix = "." + (
@@ -482,20 +424,13 @@ class ScreenAnalyzer(QObject):
             ) as temp_file:
                 temp_file.write(audio_data)
                 self._temp_audio_file_path = temp_file.name
-            print(
-                f"ScreenAnalyzer: Audio data written to temporary file: {self._temp_audio_file_path}"
-            )
             self.player.setSource(QUrl.fromLocalFile(self._temp_audio_file_path))
             self.player.play()
-            print("ScreenAnalyzer: Initiated audio playback.")
         except Exception as e:
-            print(f"ScreenAnalyzer: Error preparing/playing audio: {e}")
             self._delete_temp_file(self._temp_audio_file_path)
 
     def _handle_media_status_changed(self, status: QMediaPlayer.MediaStatus):
-        print(f"ScreenAnalyzer: Media status changed to: {status}")
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            print("ScreenAnalyzer: Audio playback finished.")
             self.player.setSource(QUrl())
             if self._temp_audio_file_path and os.path.exists(
                 self._temp_audio_file_path
@@ -506,7 +441,6 @@ class ScreenAnalyzer(QObject):
             else:
                 self._temp_audio_file_path = None
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
-            print("ScreenAnalyzer: Invalid media for playback.")
             self.player.setSource(QUrl())
             self._delete_temp_file(self._temp_audio_file_path)
 
@@ -514,11 +448,8 @@ class ScreenAnalyzer(QObject):
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                print(f"ScreenAnalyzer: Temporary audio file {file_path} deleted.")
-            except Exception as e:
-                print(
-                    f"ScreenAnalyzer: Error deleting temporary audio file {file_path}: {e}"
-                )
+            except Exception:
+                pass
         if file_path == self._temp_audio_file_path:
             self._temp_audio_file_path = None
 
@@ -542,32 +473,12 @@ class ScreenAnalyzer(QObject):
                 self.pet_window.raise_()
                 QApplication.processEvents()
         if self.analysis_thread and self.analysis_thread.isRunning():
-            print(
-                f"ScreenAnalyzer: Screen worker error, requesting analysis_thread (ID: {id(self.analysis_thread)}) to quit."
-            )
             self.analysis_thread.quit()
         else:
-            print(
-                f"ScreenAnalyzer: Screen worker error, but analysis_thread (ID: {id(self.analysis_thread) if self.analysis_thread else 'None'}) was not running or None."
-            )
-
-    @pyqtSlot(str)
-    def _handle_tts_request_error(self, error_message: str):
-        print(f"ScreenAnalyzer: TTSRequestWorker Error - {error_message}")
+            self._cleanup_analysis_thread_and_worker()
 
     def _cleanup_analysis_thread_and_worker(self):
-        thread_id_before = id(self.analysis_thread) if self.analysis_thread else "None"
-        worker_id_before = id(self.analysis_worker) if self.analysis_worker else "None"
-        is_running_before = (
-            self.analysis_thread.isRunning() if self.analysis_thread else "N/A"
-        )
-        print(
-            f"ScreenAnalyzer: CLEANUP_ANALYSIS - START. Target thread (ID: {thread_id_before}), worker (ID: {worker_id_before}), isRunning: {is_running_before}"
-        )
         if self.analysis_worker:
-            print(
-                f"ScreenAnalyzer: CLEANUP_ANALYSIS - Disconnecting signals from analysis_worker (ID: {id(self.analysis_worker)})."
-            )
             try:
                 self.analysis_worker.request_gui_hide_before_grab.disconnect(
                     self._handle_hide_request
@@ -600,63 +511,17 @@ class ScreenAnalyzer(QObject):
                 pass
             self.analysis_worker.deleteLater()
             self.analysis_worker = None
-            print(
-                f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_worker (formerly ID: {worker_id_before}) set to None and scheduled for deletion."
-            )
         if self.analysis_thread:
-            target_thread_id = id(self.analysis_thread)
-            print(
-                f"ScreenAnalyzer: CLEANUP_ANALYSIS - Processing analysis_thread (ID: {target_thread_id})."
-            )
             if self.analysis_thread.isRunning():
-                print(
-                    f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_thread (ID: {target_thread_id}) is still running. Quitting and waiting..."
-                )
                 self.analysis_thread.quit()
                 if not self.analysis_thread.wait(1500):
-                    print(
-                        f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_thread (ID: {target_thread_id}) did not quit gracefully. Terminating."
-                    )
                     self.analysis_thread.terminate()
                     self.analysis_thread.wait()
-                else:
-                    print(
-                        f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_thread (ID: {target_thread_id}) quit gracefully."
-                    )
-            else:
-                print(
-                    f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_thread (ID: {target_thread_id}) was not running."
-                )
             self.analysis_thread.deleteLater()
             self.analysis_thread = None
-            print(
-                f"ScreenAnalyzer: CLEANUP_ANALYSIS - analysis_thread (formerly ID: {target_thread_id}) set to None and scheduled for deletion."
-            )
-        else:
-            print(
-                f"ScreenAnalyzer: CLEANUP_ANALYSIS - self.analysis_thread was already None when cleanup was called for it."
-            )
-        print(
-            f"ScreenAnalyzer: CLEANUP_ANALYSIS - END. self.analysis_thread is now: {self.analysis_thread}"
-        )
 
     def _cleanup_tts_request_thread_and_worker(self):
-        thread_id_before = (
-            id(self.tts_request_thread) if self.tts_request_thread else "None"
-        )
-        worker_id_before = (
-            id(self.tts_request_worker) if self.tts_request_worker else "None"
-        )
-        is_running_before = (
-            self.tts_request_thread.isRunning() if self.tts_request_thread else "N/A"
-        )
-        print(
-            f"ScreenAnalyzer: CLEANUP_TTS - START. Target thread (ID: {thread_id_before}), worker (ID: {worker_id_before}), isRunning: {is_running_before}"
-        )
         if self.tts_request_worker:
-            print(
-                f"ScreenAnalyzer: CLEANUP_TTS - Disconnecting signals from tts_request_worker (ID: {id(self.tts_request_worker)})."
-            )
             try:
                 self.tts_request_worker.audio_ready.disconnect(
                     self._handle_audio_playback
@@ -665,54 +530,28 @@ class ScreenAnalyzer(QObject):
                 pass
             try:
                 self.tts_request_worker.tts_error.disconnect(
-                    self._handle_tts_request_error
+                    self._handle_tts_request_error_queued
                 )
             except (TypeError, RuntimeError):
                 pass
             try:
                 self.tts_request_worker.finished.disconnect(
-                    self._cleanup_tts_request_thread_and_worker
+                    self._handle_tts_worker_finished_queued
                 )
             except (TypeError, RuntimeError):
                 pass
             self.tts_request_worker.deleteLater()
             self.tts_request_worker = None
-            print(
-                f"ScreenAnalyzer: CLEANUP_TTS - tts_request_worker (formerly ID: {worker_id_before}) set to None and scheduled for deletion."
-            )
         if self.tts_request_thread:
-            target_thread_id = id(self.tts_request_thread)
-            print(
-                f"ScreenAnalyzer: CLEANUP_TTS - Processing tts_request_thread (ID: {target_thread_id})."
-            )
             if self.tts_request_thread.isRunning():
                 print(
-                    f"ScreenAnalyzer: CLEANUP_TTS - tts_request_thread (ID: {target_thread_id}) is still running. Quitting and waiting..."
+                    "ScreenAnalyzer: WARNING - _cleanup_tts_request_thread_and_worker called on a running thread. Forcing quit."
                 )
                 self.tts_request_thread.quit()
-                if not self.tts_request_thread.wait(1000):
-                    print(
-                        f"ScreenAnalyzer: CLEANUP_TTS - tts_request_thread (ID: {target_thread_id}) did not quit gracefully. Terminating."
-                    )
+                if not self.tts_request_thread.wait(500):
                     self.tts_request_thread.terminate()
                     self.tts_request_thread.wait()
-                else:
-                    print(
-                        f"ScreenAnalyzer: CLEANUP_TTS - tts_request_thread (ID: {target_thread_id}) quit gracefully."
-                    )
-            else:
-                print(
-                    f"ScreenAnalyzer: CLEANUP_TTS - tts_request_thread (ID: {target_thread_id}) was not running."
-                )
             self.tts_request_thread.deleteLater()
             self.tts_request_thread = None
-            print(
-                f"ScreenAnalyzer: CLEANUP_TTS - tts_request_thread (formerly ID: {target_thread_id}) set to None and scheduled for deletion."
-            )
-        else:
-            print(
-                f"ScreenAnalyzer: CLEANUP_TTS - self.tts_request_thread was already None when cleanup was called for it."
-            )
-        print(
-            f"ScreenAnalyzer: CLEANUP_TTS - END. self.tts_request_thread is now: {self.tts_request_thread}"
-        )
+        self.is_tts_processing = False
+        QTimer.singleShot(0, self._try_process_next_tts_in_queue)

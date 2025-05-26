@@ -98,14 +98,16 @@ class PromptBuilder:
         json_format_instruction = (
             "重要：你的最终输出必须严格遵循以下JSON格式，并且只包含这个JSON对象，没有任何其他文字或标记（如 '```json' 或 '```'）前后包裹。\n"
             "JSON对象必须包含以下键：\n"
-            f"  - 'text' : 这是你作为{pet_name}对用户 {user_name} 说的话。\n"
+            f"  - 'text' : 这是你作为{pet_name}对用户 {user_name} 说的话，记住，{user_name}不要发生任何变化。\n"
             f"  - 'emotion' : 这是你当前的情绪。其值必须是以下预定义情绪之一：{emotions_str}。\n"
+            f"  - 'text_japanese': str | null,'text'字段内容的日语版本。\n"
             f"  - 'thinking_process': 英文思考过程，在 <think>...</think> 标签内。\n"
             "JSON输出示例:\n"
             "{\n"
             f'  "text": "你好呀，我是{pet_name}！",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
-            '  "thinking_process": "<think>User greeted. I will greet back friendly. Emotion: smile. Rules check: OK.</think>"\n'
+            f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
+            '  "thinking_process": "<think>User greeted. I will greet back friendly. Emotion: smile. Japanese translation provided. Rules check: OK.</think>"\n'
             "}\n"
             "再次强调：绝对不要在JSON对象之外输出任何字符。"
         )
@@ -116,6 +118,7 @@ class PromptBuilder:
         full_prompt_parts = [
             system_instruction_part_A,
             formatted_history_string,
+            new_user_message_text,
             "\n" + system_instruction_part_B,
         ]
         unified_prompt_string = "".join(full_prompt_parts)
@@ -144,17 +147,17 @@ class PromptBuilder:
                 f"将使用默认任务描述。"
             )
             task_description = (
-                f"作为{pet_name}，请分析这张关于用户 {user_name} 屏幕的图片，"
+                f"请你作为{pet_name}分析这张关于用户 {user_name} 屏幕的图片，"
                 "并对你看到的内容发表一句简短的、符合你角色个性的评论。"
             )
         json_output_instruction = (
-            "你的回复必须严格遵循以下JSON格式，并且只包含这个JSON对象，没有任何其他文字或标记（如 '```json' 或 '```'）前后包裹。\n"
+            "你的回复必须严格遵循以下JSON格式，并且只包含这个JSON对象，没有任何其他文字或标记（如 '```json' 或 '```'）前后包裹。。\n"
             "JSON对象必须包含以下键：\n"
-            f"  - 'text': str, 你作为{pet_name}对此屏幕内容的中文评论或感想。\n"
-            f"  - 'emotion': str, 你当前的情绪。其值必须是以下预定义情绪之一：{available_emotions_str}。\n"
-            f"  - 'text_japanese': str | null, 'text'字段内容的日语翻译版本。如果无法准确翻译、内容不适合翻译或没有必要翻译（例如纯数字或英文），请将此字段设为 null 或者完全省略它。\n"
+            f"  - 'text': str, 作为{pet_name}对此屏幕内容的中文评论或感想。\n"
+            f"  - 'emotion': str,模拟你当前的情绪。其值必须是以下预定义选项之一：{available_emotions_str}。\n"
+            f"  - 'text_japanese': str | null, 'text'字段内容的日语版本。\n"
             "  - 'thinking_process': str, 你的英文思考过程，在 <think>...</think> 标签内，简要说明你为什么这么说、选择这个情绪以及如何进行翻译（如果适用）。\n"
-            "\nJSON输出示例:\n"
+            "\n用户名“{user_name}”在text里不需要翻译，在text_japanese要转成片假名，JSON输出示例:\n"
             "{\n"
             f'  "text": "用户好像在看一部有趣的动漫！",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else "default"}",\n'
@@ -169,9 +172,9 @@ class PromptBuilder:
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
         return (
-            f"请仔细阅读以下对话内容并生成一段不大于400个中文汉字的摘要，不要太短，确保信息准确性，保留好重要内容。\n"
+            f"请仔细阅读以下对话内容并生成一段大于300字、不大于1000字的摘要，确保信息准确性，保留好重要内容。\n"
             f"摘要必须只聚焦于 '{topic}' 这个主题（可携带时间信息，如有人名，则对应发送者名字必须要记录）。\n"
-            f"响应要遵从格式：x月x日 时:分:秒 ：内容（例：2月1日 14:45:11 XX说周末要出去玩），如果记录里的发生时间信息有缺失请跳过时间直接记录内容，注意，摘要只要一段话，只需记录最早的时间，不要分成多段，不要记录多个时间，以下是你要阅读的记录\n"
+            f"响应要遵从格式：x月x日 时:分:秒 ：内容（例：2月1日 14:45:11 XX说周末要出去玩），如果记录里的发生时间信息有缺失请跳过时间直接记录内容，注意，摘要只需记录最早的时间，不要分成多段，不要记录多个时间，以下是你要阅读的记录\n"
             f"发生时间：{time_info}\n"
             f"对话：\n---{text_to_summarize}---\n"
             f"现在请你输出关于 '{topic}' 的摘要内容，不要添加任何其他前缀、标题或无关评论。"

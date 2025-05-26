@@ -210,7 +210,12 @@ class LLM_request:
         self.api_keys_actual: List[str] = []
         api_key_config = model_config.get("key")
         if isinstance(api_key_config, str) and api_key_config:
-            self.api_keys_actual.append(api_key_config)
+            if "," in api_key_config and not api_key_config.startswith("["):
+                self.api_keys_actual.extend(
+                    [k.strip() for k in api_key_config.split(",")]
+                )
+            else:
+                self.api_keys_actual.append(api_key_config)
         elif isinstance(api_key_config, list) and all(
             isinstance(k, str) for k in api_key_config
         ):
@@ -465,6 +470,9 @@ class LLM_request:
                     )
                     if model_name_for_embed.startswith("models/"):
                         model_name_for_embed = model_name_for_embed.split("/")[-1]
+                    logger.info(
+                        f"Google SDK Embedding Request to {model_name_for_embed}: Text='{str(contents)[:200]}...', TaskType='{task_type_for_embed}'"
+                    )
                     response_object = await asyncio.to_thread(
                         current_sdk_client.models.embed_content,
                         model=model_name_for_embed,
@@ -757,6 +765,9 @@ class LLM_request:
                     logger.debug(
                         f"Attempt {attempt+1}/{max_retries} - HTTP POST to {api_url} using Key ...{current_api_key[-4:] if current_api_key else 'N/A'}"
                     )
+                    logger.info(
+                        f"HTTP POST Request to {api_url}: Payload='{str(payload)}...'"
+                    )
                     timeout_seconds = self.params.get("http_timeout_seconds", 30)
                     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
                     async with session.post(
@@ -797,6 +808,9 @@ class LLM_request:
                                 )
                         response.raise_for_status()
                         response_json = await response.json()
+                        logger.info(
+                            f"HTTP POST Raw Response from {api_url}: {str(response_json)}"
+                        )
                         return response_json
             except aiohttp.ClientResponseError as e:
                 last_exception = e

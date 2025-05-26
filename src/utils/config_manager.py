@@ -51,6 +51,21 @@ class ConfigManager:
             "GEMINI", "MODEL_NAME", fallback="gemini-1.5-flash-latest"
         )
 
+    def get_memory_build_interval_seconds(self) -> int:
+        return self.config.getint(
+            "MEMORY_SYSTEM", "BUILD_INTERVAL_SECONDS", fallback=600
+        )
+
+    def get_memory_forget_interval_seconds(self) -> int:
+        return self.config.getint(
+            "MEMORY_SYSTEM", "FORGET_INTERVAL_SECONDS", fallback=3600
+        )
+
+    def get_memory_consolidate_interval_seconds(self) -> int:
+        return self.config.getint(
+            "MEMORY_SYSTEM", "CONSOLIDATE_INTERVAL_SECONDS", fallback=3600
+        )
+
     def get_http_proxy(self):
         proxy = self.config.get("GEMINI", "HTTP_PROXY", fallback="").strip()
         return proxy if proxy else None
