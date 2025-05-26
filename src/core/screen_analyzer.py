@@ -163,19 +163,15 @@ class ScreenAnalysisWorker(QObject):
             mime_type = "image/jpeg"
             if not self._is_running:
                 return
-            final_prompt_text = self.prompt_builder.build_screen_analysis_prompt(
-                pet_name=self.pet_name,
-                user_name=self.user_name,
-                available_emotions=self.available_emotions_list,
-            )
+            user_supplementary_notes_for_image = ""
             print(
-                f"ScreenAnalysisWorker ({worker_id}): Sending image and prompt to Gemini."
+                f"ScreenAnalysisWorker ({worker_id}): Sending image to Gemini. Supplementary notes: '{user_supplementary_notes_for_image}'"
             )
             response_data = await asyncio.to_thread(
                 self.gemini_client.send_message_with_image,
                 image_bytes=img_bytes,
                 mime_type=mime_type,
-                prompt_text=final_prompt_text,
+                prompt_text=user_supplementary_notes_for_image,
             )
             print(f"ScreenAnalysisWorker ({worker_id}): Gemini response received.")
             if not self._is_running:
@@ -190,9 +186,10 @@ class ScreenAnalysisWorker(QObject):
                     f"Invalid response from Gemini: {response_data}"
                 )
         except Exception as e_process_llm:
-            self.error_occurred.emit(
-                f"Error during screenshot processing or LLM call: {e_process_llm}"
-            )
+            if self._is_running:
+                self.error_occurred.emit(
+                    f"Error during screenshot processing or LLM call: {e_process_llm}"
+                )
         print(
             f"ScreenAnalysisWorker ({worker_id}): _async_grab_and_process_llm finished."
         )
@@ -396,10 +393,13 @@ class ScreenAnalyzer(QObject):
 
     @pyqtSlot(dict)
     def _handle_llm_response(self, response_data: Dict[str, Any]):
-        text = response_data.get("text", "Hmm...")
+        text_chinese = response_data.get("text", "Hmm...")
         emotion = response_data.get("emotion", "default")
-        print(f"ScreenAnalyzer: LLM Response - Text: '{text}', Emotion: '{emotion}'")
-        self.pet_reaction_ready.emit(text, emotion)
+        text_japanese = response_data.get("text_japanese")
+        print(
+            f"ScreenAnalyzer: LLM Response - Text (CN): '{text_chinese}', Emotion: '{emotion}', Text (JP): '{text_japanese}'"
+        )
+        self.pet_reaction_ready.emit(text_chinese, emotion)
         if self.analysis_thread and self.analysis_thread.isRunning():
             print(
                 f"ScreenAnalyzer: LLM response handled, requesting analysis_thread (ID: {id(self.analysis_thread)}) to quit."
@@ -409,13 +409,23 @@ class ScreenAnalyzer(QObject):
             print(
                 f"ScreenAnalyzer: LLM response handled, but analysis_thread (ID: {id(self.analysis_thread) if self.analysis_thread else 'None'}) was not running or None."
             )
-        if self.tts_enabled_globally and text:
-            self._initiate_tts_request(text)
+        if self.tts_enabled_globally:
+            if text_japanese and text_japanese.strip():
+                print(
+                    f"ScreenAnalyzer: TTS globally enabled and Japanese text found. Initiating TTS for: '{text_japanese[:50]}...'"
+                )
+                self._initiate_tts_request(text_japanese)
+            elif not (text_japanese and text_japanese.strip()):
+                print(
+                    "ScreenAnalyzer: TTS globally enabled, but Japanese text for TTS is missing, empty, or null. Skipping TTS for this interaction."
+                )
         else:
             if not self.tts_enabled_globally:
                 print("ScreenAnalyzer: TTS is globally disabled.")
-            if not text:
-                print("ScreenAnalyzer: No text from LLM for TTS.")
+            if not text_japanese:
+                print(
+                    "ScreenAnalyzer: Japanese text from LLM for TTS was not provided or was null."
+                )
 
     def _initiate_tts_request(self, text_to_speak: str):
         if self.tts_request_thread:

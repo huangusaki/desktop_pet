@@ -42,6 +42,9 @@ class PetResponseSchema(BaseModel):
         None,
         description='模型的思考过程，使用英文，在<think>和</think>标签之间。例如: "<think>User said X...</think>"',
     )
+    text_japanese: Optional[str] = Field(
+        None, description="Bot说的话的日语版本，用于TTS"
+    )
 
 
 class GeminiClient:

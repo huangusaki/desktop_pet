@@ -128,24 +128,42 @@ class PromptBuilder:
     def build_screen_analysis_prompt(
         self, pet_name: str, user_name: str, available_emotions: List[str]
     ) -> str:
-        raw_template = self.config_manager.get_screen_analysis_prompt()
+        base_task_description_template = (
+            self.config_manager.get_screen_analysis_prompt()
+        )
         available_emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         try:
-            return raw_template.format(
+            task_description = base_task_description_template.format(
                 pet_name=pet_name,
                 user_name=user_name,
                 available_emotions_str=available_emotions_str,
             )
         except KeyError as e:
             print(
-                f"构建屏幕分析Prompt时出错：模板中缺少键 {e}。原始模板：'{raw_template}'"
+                f"构建屏幕分析Prompt时出错：用户提供的模板 '{base_task_description_template}' 中缺少键 {e}。"
+                f"将使用默认任务描述。"
             )
-            safe_template = (
-                f"你是{pet_name}，这张图片是用户当前的屏幕截图。\n"
-                "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n"
-                f"你的回复必须是一个JSON对象，包含 'text' (你作为Bot说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
+            task_description = (
+                f"作为{pet_name}，请分析这张关于用户 {user_name} 屏幕的图片，"
+                "并对你看到的内容发表一句简短的、符合你角色个性的评论。"
             )
-            return safe_template
+        json_output_instruction = (
+            "你的回复必须严格遵循以下JSON格式，并且只包含这个JSON对象，没有任何其他文字或标记（如 '```json' 或 '```'）前后包裹。\n"
+            "JSON对象必须包含以下键：\n"
+            f"  - 'text': str, 你作为{pet_name}对此屏幕内容的中文评论或感想。\n"
+            f"  - 'emotion': str, 你当前的情绪。其值必须是以下预定义情绪之一：{available_emotions_str}。\n"
+            f"  - 'text_japanese': str | null, 'text'字段内容的日语翻译版本。如果无法准确翻译、内容不适合翻译或没有必要翻译（例如纯数字或英文），请将此字段设为 null 或者完全省略它。\n"
+            "  - 'thinking_process': str, 你的英文思考过程，在 <think>...</think> 标签内，简要说明你为什么这么说、选择这个情绪以及如何进行翻译（如果适用）。\n"
+            "\nJSON输出示例:\n"
+            "{\n"
+            f'  "text": "用户好像在看一部有趣的动漫！",\n'
+            f'  "emotion": "{available_emotions[0] if available_emotions else "default"}",\n'
+            f'  "text_japanese": "ユーザーは面白いアニメを見ているようですね！",\n'
+            '  "thinking_process": "<think>User seems to be watching an interesting anime. I will comment on it with a curious emotion. Japanese translation provided.</think>"\n'
+            "}"
+        )
+        final_prompt = f"{task_description}\n\n{json_output_instruction}"
+        return final_prompt
 
     def build_topic_specific_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str

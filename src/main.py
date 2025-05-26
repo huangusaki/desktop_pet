@@ -802,8 +802,25 @@ if __name__ == "__main__":
         print(
             "INFO Main: Screen analyzer not started (disabled or dependencies missing)."
         )
+    initial_pet_message_text = "你好！我在这里哦！"
+    if (
+        mongo_handler_global
+        and mongo_handler_global.is_connected()
+        and config_manager_global
+    ):
+        pet_name_for_history = config_manager_global.get_pet_name()
+        recent_history = mongo_handler_global.get_recent_chat_history(
+            count=5, role_play_character=pet_name_for_history
+        )
+        if recent_history:
+            for message_doc in recent_history:
+                if message_doc.get("sender") == pet_name_for_history:
+                    text = message_doc.get("message_text")
+                    if text:
+                        initial_pet_message_text = text
+                        break
+    pet_window_global.update_speech_and_emotion(initial_pet_message_text, "default")
     pet_window_global.show()
-    pet_window_global.set_speech_text("你好！我在这里哦！")
     schedule_memory_tasks(app)
     exit_code = app.exec()
     AsyncioHelper.stop_asyncio_loop()

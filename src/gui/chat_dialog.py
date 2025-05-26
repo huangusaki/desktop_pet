@@ -179,6 +179,7 @@ class ChatDialog(QDialog):
         self.setLayout(main_layout)
         self.async_thread: Optional[QThread] = None
         self.async_runner: Optional[AsyncRunner] = None
+        self._is_closing = False
 
     def _process_avatar_to_circular_original_res(
         self, image_path: str
@@ -257,9 +258,9 @@ class ChatDialog(QDialog):
             self.async_runner = None
 
     def _handle_thread_actually_finished(self, finished_thread: QThread):
-        print(f"ChatDialog: Thread {finished_thread} has actually finished.")
         if self.async_thread is finished_thread:
             self.async_thread = None
+        if not self._is_closing:
             if not self.send_button.isEnabled():
                 self.send_button.setEnabled(True)
             if not self.input_field.isEnabled():
@@ -283,7 +284,7 @@ class ChatDialog(QDialog):
         if self.async_thread and self.async_thread.isRunning():
             print("ChatDialog: Previous async task still running. Please wait.")
             return
-        current_task_thread = QThread()
+        current_task_thread = QThread(self)
         self.async_runner = AsyncRunner(self._send_message_async_logic(user_message))
         self.async_runner.moveToThread(current_task_thread)
         self.async_runner.task_completed.connect(self._handle_async_response)
@@ -304,9 +305,6 @@ class ChatDialog(QDialog):
         retrieved_memories_text = ""
         if self.hippocampus_manager and self.hippocampus_manager._initialized:
             try:
-                print(
-                    "ChatDialog: Accessing HippocampusManager for memory retrieval..."
-                )
                 memories = await self.hippocampus_manager.get_memory_from_text(
                     user_message
                 )
@@ -322,9 +320,6 @@ class ChatDialog(QDialog):
                             + "\n".join(formatted_mems)
                             + "\n\n"
                         )
-                        print(f"ChatDialog: 检索到记忆: {len(memories)} 条。")
-                else:
-                    print("ChatDialog: 未检索到相关记忆。")
             except Exception as e_mem:
                 print(f"ChatDialog: 检索记忆时发生错误: {e_mem}")
         final_user_input_for_llm = user_message
@@ -333,23 +328,14 @@ class ChatDialog(QDialog):
                 f"{retrieved_memories_text}"
                 f"基于以上记忆和你对我的了解，以及我们之前的对话，请回应我的这句话：{user_message}"
             )
-            print(
-                f"ChatDialog: Input to LLM (with memory):\n{final_user_input_for_llm[:300]}..."
-            )
-        print("ChatDialog: Calling GeminiClient.send_message...")
         response_data = self.gemini_client.send_message(final_user_input_for_llm)
-        print(
-            f"ChatDialog: Gemini response received: {response_data.get('text')}, {response_data.get('emotion')}"
-        )
         return response_data
 
     def _handle_async_response(self, response_data: Dict[str, Any]):
-        self.send_button.setEnabled(True)
-        self.input_field.setEnabled(True)
-        self.input_field.setFocus()
+        current_runner = self.async_runner
+        current_thread = current_runner.thread() if current_runner else None
         pet_text = response_data.get("text", "我好像不知道该说什么了...")
         pet_emotion = response_data.get("emotion", "default")
-        self._add_message_to_display(self.pet_name, pet_text, is_user=False)
         if self.mongo_handler and self.mongo_handler.is_connected():
             actual_pet_name = self.config_manager.get_pet_name()
             self.mongo_handler.insert_chat_message(
@@ -358,35 +344,39 @@ class ChatDialog(QDialog):
                 role_play_character=self.current_role_play_character,
             )
         self.speech_and_emotion_received.emit(pet_text, pet_emotion)
-        task_thread = None
-        if self.async_runner and self.async_runner.thread():
-            task_thread = self.async_runner.thread()
-        elif self.async_thread:
-            task_thread = self.async_thread
-        if task_thread and task_thread.isRunning():
+        if self._is_closing:
             print(
-                f"ChatDialog: Task completed. Requesting thread {task_thread} to quit."
+                "ChatDialog: Dialog is closing. Skipping internal UI updates for this response."
             )
-            task_thread.quit()
+        else:
+            self.send_button.setEnabled(True)
+            self.input_field.setEnabled(True)
+            self.input_field.setFocus()
+            self._add_message_to_display(self.pet_name, pet_text, is_user=False)
+        if current_thread and current_thread.isRunning():
+            current_thread.quit()
         self._cleanup_async_resources()
 
     def _handle_async_failure(self, error_message: str):
-        self.send_button.setEnabled(True)
-        self.input_field.setEnabled(True)
-        self.input_field.setFocus()
-        print(f"ChatDialog: Async task failed: {error_message}")
-        self._add_message_to_display(
-            self.pet_name, f"发生错误: {error_message}", is_user=False
+        current_runner = self.async_runner
+        current_thread = current_runner.thread() if current_runner else None
+        self.speech_and_emotion_received.emit(
+            f"呜，我好像出错了... ({error_message[:30]})", "sad"
         )
-        self.speech_and_emotion_received.emit("呜，我好像出错了...", "sad")
-        task_thread = None
-        if self.async_runner and self.async_runner.thread():
-            task_thread = self.async_runner.thread()
-        elif self.async_thread:
-            task_thread = self.async_thread
-        if task_thread and task_thread.isRunning():
-            print(f"ChatDialog: Task failed. Requesting thread {task_thread} to quit.")
-            task_thread.quit()
+        if self._is_closing:
+            print(
+                f"ChatDialog: Dialog is closing. Skipping internal UI updates for this failure: {error_message}"
+            )
+        else:
+            self.send_button.setEnabled(True)
+            self.input_field.setEnabled(True)
+            self.input_field.setFocus()
+            print(f"ChatDialog: Async task failed: {error_message}")
+            self._add_message_to_display(
+                self.pet_name, f"发生错误: {error_message}", is_user=False
+            )
+        if current_thread and current_thread.isRunning():
+            current_thread.quit()
         self._cleanup_async_resources()
 
     def _format_message_html(
@@ -435,6 +425,8 @@ class ChatDialog(QDialog):
     def _add_message_to_display(
         self, sender_name_for_log_only: str, message: str, is_user: bool
     ):
+        if self._is_closing:
+            return
         avatar_qurl = self.user_avatar_qurl if is_user else self.pet_avatar_qurl
         actual_sender_name = self.user_name if is_user else self.pet_name
         html_content = self._format_message_html(
@@ -444,6 +436,7 @@ class ChatDialog(QDialog):
         self.chat_display.ensureCursorVisible()
 
     def open_dialog(self):
+        self._is_closing = False
         self.chat_display.clear()
         history_for_display = self._get_raw_chat_history_for_display()
         if history_for_display:
@@ -459,37 +452,28 @@ class ChatDialog(QDialog):
             no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
             self.chat_display.setHtml(no_history_html)
         self.input_field.clear()
+        self.send_button.setEnabled(True)
+        self.input_field.setEnabled(True)
         self.show()
         self.activateWindow()
         self.raise_()
         self.input_field.setFocus()
 
-    def closeEvent(self, event):
+    def _close_dialog_actions(self):
+        if self._is_closing:
+            return
+        self._is_closing = True
         self.dialog_closed.emit()
         active_thread = self.async_thread
         if active_thread and active_thread.isRunning():
-            print(
-                f"ChatDialog: Closing dialog, async task on thread {active_thread} is running. Requesting quit and waiting..."
-            )
             active_thread.quit()
-            if not active_thread.wait(3000):
-                print(
-                    f"ChatDialog: Warning: Thread {active_thread} did not finish in time on close."
-                )
-        self._cleanup_async_resources()
+        else:
+            self._cleanup_async_resources()
+
+    def closeEvent(self, event):
+        self._close_dialog_actions()
         super().closeEvent(event)
 
     def reject(self):
-        self.dialog_closed.emit()
-        active_thread = self.async_thread
-        if active_thread and active_thread.isRunning():
-            print(
-                f"ChatDialog: Dialog rejected, async task on thread {active_thread} is running. Requesting quit and waiting..."
-            )
-            active_thread.quit()
-            if not active_thread.wait(3000):
-                print(
-                    f"ChatDialog: Warning: Thread {active_thread} did not finish in time on reject."
-                )
-        self._cleanup_async_resources()
+        self._close_dialog_actions()
         super().reject()

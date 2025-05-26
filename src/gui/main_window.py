@@ -40,13 +40,13 @@ class PetWindow(QWidget):
         self.speech_bubble_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.speech_bubble_label.setStyleSheet(
             "QLabel {"
-            "  background-color: rgba(240, 240, 240, 110);"
+            "  background-color: rgba(240, 240, 240, 170);"
             "  color: black;"
             "  padding: 8px;"
             "  border-radius: 10px;"
             "  margin-left: 5px;"
             "  margin-right: 5px;"
-            "  margin-top: -2px;"
+            "  margin-top: -3px;"
             "}"
         )
         self.speech_bubble_label.setText("")
