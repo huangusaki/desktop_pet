@@ -125,7 +125,7 @@ class GeminiClient:
                     "thinking_process": f"<think>Error: {error_msg}</think>",
                 }
             generation_config_args = {
-                "temperature": 0.75,
+                "temperature": 0.70,
                 "tools": self.enabled_tools,
             }
             generation_config_args["thinking_config"] = types.ThinkingConfig(
@@ -135,6 +135,7 @@ class GeminiClient:
             response_object = self.client.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
+            logger.info(f"GeminiClient: Raw LLM Response (send_message): {str(response_object)}")
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:
@@ -217,6 +218,8 @@ class GeminiClient:
                     pet_name=self.pet_name,
                     user_name=self.user_name,
                     available_emotions=self.available_emotions,
+                    mongo_handler=self.mongo_handler, 
+                    unified_default_emotion=self.unified_default_emotion
                 )
             )
             user_parts_for_vision = [types.Part(text=screen_analysis_text_prompt)]
@@ -250,7 +253,7 @@ class GeminiClient:
                         log_str += f"    Part {j} (inline_data): mime_type='{part_item.inline_data.mime_type}', data_length={len(part_item.inline_data.data)}\n"
             logger.debug(log_str.strip())
             logger.debug(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
-            vision_config_args = {"temperature": 0.75, "tools": self.enabled_tools}
+            vision_config_args = {"temperature": 0.70, "tools": self.enabled_tools}
             vision_config_args["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=self.thinking_budget
             )
@@ -260,6 +263,7 @@ class GeminiClient:
                 contents=contents_for_vision,
                 config=api_vision_config,
             )
+            logger.info(f"GeminiClient: Raw LLM Response (send_message_with_image): {str(response_object)}")
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:

@@ -28,7 +28,37 @@ class ConfigManager:
 class PromptBuilder:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-
+    def _get_formatted_screen_analysis_log_content( # 新增辅助方法
+        self,
+        mongo_handler: Any,
+        pet_name: str, # pet_name 用于 role_play_character 过滤
+        count: int = 5
+    ) -> str:
+        """
+        从数据库获取并格式化最近的屏幕分析日志。
+        """
+        log_lines = []
+        if (
+            mongo_handler
+            and hasattr(mongo_handler, "is_connected")
+            and mongo_handler.is_connected()
+            and hasattr(mongo_handler, "get_recent_screen_analysis_log")
+        ):
+            raw_logs = mongo_handler.get_recent_screen_analysis_log(
+                count=count,
+                role_play_character=pet_name # 使用 pet_name 作为角色过滤
+            )
+            if raw_logs:
+                for log_entry in raw_logs:
+                    text_content = log_entry.get("message_text", "")
+                    if text_content:
+                        # 这里我们只记录 Bot 说的话，因为 screen_analysis_log 的 sender 应该都是 Bot
+                        log_lines.append(f"- {text_content}")
+        
+        if log_lines:
+            return "\n".join(log_lines)
+        else:
+            return "(最近没有屏幕观察记录)"
     def _get_formatted_chat_history_content(
         self,
         mongo_handler: Any,
@@ -137,19 +167,18 @@ class PromptBuilder:
             f"现在请综合你的角色设定、以上的聊天记录，对 {user_name} 的最新消息进行回复。"
         )
         json_format_instruction = (
-            "\n警告，输出格式非常重要，你的输出必须严格遵循JSON格式，并且只包含JSON对象，目标JSON对象必须包含以下键：\n"
-            f"text:这是你作为{pet_name}对用户 {user_name} 说的话，记住，{user_name}不要发生任何变化。\n"
-            f"emotion:这是你当前的情绪。其值必须是以下预定义情绪之一（不要改动值）：{emotions_str}。\n"
-            f"text_japanese:str | null,'text'字段内容的日语版本。\n"
-            f"thinking_process:详细的思考过程，在 <think>...</think> 标签内。\n"
-            "JSON输出示例:\n"
+            "\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
+            "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
+            f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way.\n"
+            f"emotion: This is your current emotion. Its value MUST be one of the following predefined emotions (do not change the values): {emotions_str}.\n"
+            f"text_japanese: str | null, the Japanese version of the content in the 'text' field.\n"
+            "JSON output example:\n"
             "{\n"
-            f'  "text": "你好呀，我是{pet_name}！",\n'
-            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
+            f'  "text": "Hello there, I am {pet_name}!",\n'
+            f'  "emotion": "{emotions_str[0] if emotions_str else unified_default_emotion}",\n' # Assuming you want to keep this logic
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
-            '  "thinking_process": "<think>User greeted. I will greet back friendly. Emotion: smile. Japanese translation provided. Rules check: OK.</think>"\n'
             "}\n"
-            "强调：绝对不要在JSON对象之外输出任何字符。"
+            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate."
         )
         system_instruction_part_B = task_instruction + "\n" + json_format_instruction
         full_prompt_parts = [
@@ -165,12 +194,21 @@ class PromptBuilder:
         return unified_prompt_string
 
     def build_screen_analysis_prompt(
-        self, pet_name: str, user_name: str, available_emotions: List[str]
-    ) -> str:
+    self,
+    pet_name: str,
+    user_name: str,
+    available_emotions: List[str],
+    mongo_handler: Any,
+    unified_default_emotion: str ,
+) -> str:
         base_task_description_template = (
             self.config_manager.get_screen_analysis_prompt()
         )
         available_emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
+        recent_screen_logs_str = self._get_formatted_screen_analysis_log_content(
+            mongo_handler, pet_name, count=5 # 使用 pet_name
+        )
+        
         try:
             task_description = base_task_description_template.format(
                 pet_name=pet_name,
@@ -182,24 +220,24 @@ class PromptBuilder:
                 f"构建屏幕分析Prompt时出错：用户提供的模板 '{base_task_description_template}' 中缺少键 {e}。"
                 f"将使用默认任务描述。"
             )
-            task_description = f"发给你的图片是{user_name}的屏幕截图，请针对屏幕内容，用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。"
+            task_description = f"发给你的图片是{user_name}的屏幕截图，请针对屏幕内容，用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
         json_output_instruction = (
-            "警告，输出格式非常重要，你的输出必须严格遵循JSON格式，并且只包含JSON对象，目标JSON对象必须包含以下键：\n"
-            f"text:这是你作为{pet_name}对用户 {user_name} 说的话，记住，{user_name}不要发生任何变化。\n"
-            f"emotion:这是你当前的情绪。其值必须是以下预定义情绪之一（不要改动值）：{available_emotions_str}。\n"
-            f"text_japanese:str | null,'text'字段内容的日语版本。\n"
-            f"thinking_process:详细的思考过程，在 <think>...</think> 标签内。\n"
-            f"\n用户名“{user_name}”在text里不需要翻译，在text_japanese要转成片假名，JSON输出示例:\n"
-            "JSON输出示例:\n"
+            f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，参考一下，避免新的回复出现过多意思相近的词语、句子：\n{recent_screen_logs_str}\n\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
+            "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
+            f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way,and use chinese in here.\n"
+            f"emotion: This is your current emotion. Its value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
+            f"text_japanese: str | null, the Japanese version of the content in the 'text' field.\n"
+            "\nJSON output example:\n"
             "{\n"
-            f'  "text": "你好呀，我是{pet_name}！",\n'
-            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
+            f'  "text": "Hello there, I am {pet_name}!",\n'
+            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n' # Assuming you want to keep this logic
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
-            '  "thinking_process": "<think>User greeted. I will greet back friendly. Emotion: smile. Japanese translation provided. Rules check: OK.</think>"\n'
-            "}\n"
-            "强调：绝对不要在JSON对象之外输出任何字符。"
+            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复."
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"
+        logger.info(
+            f"-----------------------------\n{final_prompt}\n-----------------------------"
+        )
         return final_prompt
 
     def build_topic_specific_summary_prompt(

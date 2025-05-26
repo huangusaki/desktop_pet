@@ -216,3 +216,31 @@ class MongoHandler:
                 logger.error(f"关闭 MongoDB 连接时出错: {e}", exc_info=True)
             finally:
                 self._clear_connections()
+    def get_recent_screen_analysis_log(
+        self, count: int = 5, role_play_character: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        获取最近的屏幕分析日志条目。
+        """
+        if not self.is_connected() or self.screen_analysis_log_collection is None:
+            logger.error(
+                "错误: 未连接到 MongoDB 或屏幕分析日志集合未初始化，无法获取日志。"
+            )
+            return []
+        query: Dict[str, Any] = {}
+        if role_play_character:
+            query["role_play_character"] = role_play_character
+        try:
+            # screen_analysis_log 中的 timestamp 是 float, 和 chat_history 一致
+            messages = list(
+                self.screen_analysis_log_collection.find(query)
+                .sort("timestamp", DESCENDING)
+                .limit(count)
+            )
+            return messages[::-1]  # 返回按时间升序排列
+        except Exception as e:
+            logger.error(
+                f"从 MongoDB ('{self.screen_analysis_log_collection_name}') 获取屏幕分析日志时出错: {e}",
+                exc_info=True,
+            )
+            return []
