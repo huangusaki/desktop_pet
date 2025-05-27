@@ -136,6 +136,12 @@ class ConfigManager:
     def get_screen_analysis_enabled(self) -> bool:
         return self.config.getboolean("SCREEN_ANALYSIS", "ENABLED", fallback=False)
 
+    def get_screen_analysis_task_timeout_seconds(self) -> int:
+        """获取屏幕分析任务的超时时间（秒）。"""
+        return self.config.getint(
+            "SCREEN_ANALYSIS", "TASK_TIMEOUT_SECONDS", fallback=60
+        )
+
     def get_screen_analysis_interval_seconds(self) -> int:
         return self.config.getint("SCREEN_ANALYSIS", "INTERVAL_SECONDS", fallback=60)
 

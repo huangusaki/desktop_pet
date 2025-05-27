@@ -775,10 +775,10 @@ if __name__ == "__main__":
             "critical": {"color": "red", "bold": True, "background": "white"},
         },
         field_styles={
-            "asctime": {"color": "magenta"},
-            "levelname": {"color": "white", "bold": True},
+            "asctime": {"color": "green"},
+            "levelname": {"color": "green", "bold": True},
             "name": {"color": "blue"},
-            "lineno": {"color": "white"},
+            "lineno": {"color": "blue"},
         },
     )
     if Image is None:

@@ -3,6 +3,7 @@ from google.genai import types
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 import json
 import re
+import httpx
 from pydantic import BaseModel, Field
 from typing import Literal, List, Dict, Any, Optional
 import logging

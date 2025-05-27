@@ -27,6 +27,7 @@ class ScreenAnalysisWorker(QObject):
         self,
         gemini_client: Any,
         prompt_builder: PromptBuilder,
+        config_manager: Any,
         pet_name: str,
         user_name: str,
         available_emotions: List[str],
@@ -35,6 +36,7 @@ class ScreenAnalysisWorker(QObject):
         self.gemini_client = gemini_client
         self.prompt_builder = prompt_builder
         self.pet_name = pet_name
+        self.config_manager = config_manager
         self.user_name = user_name
         self.available_emotions_list = available_emotions
         self._is_running = True
@@ -50,7 +52,6 @@ class ScreenAnalysisWorker(QObject):
 
     @pyqtSlot()
     def _trigger_async_grab_and_process(self):
-        worker_id = id(self)
         loop: Optional[asyncio.AbstractEventLoop] = None
         try:
             try:
@@ -62,7 +63,9 @@ class ScreenAnalysisWorker(QObject):
                 if loop and loop.is_running():
                     loop.stop()
                 return
-            task = asyncio.ensure_future(self._async_grab_and_process_llm(), loop=loop)
+            task = asyncio.ensure_future(
+                self._async_grab_and_process_llm_with_timeout(), loop=loop
+            )
 
             def task_done_callback(fut: asyncio.Future):
                 try:
@@ -90,7 +93,36 @@ class ScreenAnalysisWorker(QObject):
             if loop and loop.is_running():
                 loop.stop()
 
-    async def _async_grab_and_process_llm(self):
+    async def _async_grab_and_process_llm_with_timeout(self):
+        """包装器方法，使用 asyncio.wait_for 实现超时。"""
+        if not self.config_manager:
+            logger.error(
+                "ScreenAnalysisWorker: ConfigManager is None, cannot get timeout."
+            )
+            self.error_occurred.emit(
+                "ScreenAnalysisWorker: Configuration error (timeout)."
+            )
+            return
+        timeout_seconds = self.config_manager.get_screen_analysis_task_timeout_seconds()
+        try:
+            logger.debug(
+                f"Screen analysis task started with timeout: {timeout_seconds}s"
+            )
+            await asyncio.wait_for(
+                self._async_grab_and_process_llm_core(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Screen analysis task timed out after {timeout_seconds} seconds."
+            )
+            if self._is_running:
+                self.error_occurred.emit(f"屏幕分析任务超时 ({timeout_seconds}秒)。")
+        except Exception as e:
+            logger.error(
+                f"Error in _async_grab_and_process_llm_with_timeout: {e}", exc_info=True
+            )
+
+    async def _async_grab_and_process_llm_core(self):
         original_screenshot = None
         screenshot_taken_successfully = False
         try:
@@ -103,15 +135,18 @@ class ScreenAnalysisWorker(QObject):
                 return
             original_screenshot = await asyncio.to_thread(ImageGrab.grab)
             screenshot_taken_successfully = True
-        except Exception as e_grab:
-            self.error_occurred.emit(f"Error during ImageGrab.grab(): {e_grab}")
-        finally:
             self.request_gui_show_after_grab.emit()
+        except Exception as e_grab:
+            logger.error(f"Error during ImageGrab.grab(): {e_grab}", exc_info=True)
+        finally:
+            pass
         if (
             not self._is_running
             or not screenshot_taken_successfully
             or not original_screenshot
         ):
+            if not screenshot_taken_successfully and self._is_running:
+                self.error_occurred.emit("未能成功截取屏幕。")
             return
         try:
             img_byte_arr = io.BytesIO()
@@ -137,10 +172,15 @@ class ScreenAnalysisWorker(QObject):
                     f"Invalid response from Gemini: {response_data}"
                 )
         except Exception as e_process_llm:
-            if self._is_running:
-                self.error_occurred.emit(
-                    f"Error during screenshot processing or LLM call: {e_process_llm}"
-                )
+            raise
+        self.analysis_worker = ScreenAnalysisWorker(
+            gemini_client=self.gemini_client,
+            prompt_builder=self.prompt_builder,
+            config_manager=self.config_manager,
+            pet_name=self.pet_name,
+            user_name=self.user_name,
+            available_emotions=self.available_emotions_list,
+        )
 
 
 class ScreenAnalyzer(QObject):
@@ -270,6 +310,7 @@ class ScreenAnalyzer(QObject):
         self.analysis_worker = ScreenAnalysisWorker(
             gemini_client=self.gemini_client,
             prompt_builder=self.prompt_builder,
+            config_manager=self.config_manager,
             pet_name=self.pet_name,
             user_name=self.user_name,
             available_emotions=self.available_emotions_list,
@@ -296,7 +337,7 @@ class ScreenAnalyzer(QObject):
         if self.pet_window:
             self._pet_was_visible_before_grab = self.pet_window.isVisible()
             if self._pet_was_visible_before_grab:
-                self.pet_window.setWindowOpacity(0.01)
+                self.pet_window.setWindowOpacity(0.50)
                 QApplication.processEvents()
         self.ready_for_worker_grab.emit()
 

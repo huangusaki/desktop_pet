@@ -1,7 +1,9 @@
 from typing import List, Dict, Any, Tuple, Optional
-from ..utils.config_manager import ConfigManager 
+from ..utils.config_manager import ConfigManager
 import logging
+
 logger = logging.getLogger("PromptBuilder")
+
 
 class PromptBuilder:
     def __init__(self, config_manager: ConfigManager):
@@ -158,6 +160,7 @@ class PromptBuilder:
             "\n" + system_instruction_part_B,
         ]
         unified_prompt_string = "".join(filter(None, full_prompt_parts))
+        logger.info(f"{unified_prompt_string}")
         return unified_prompt_string
 
     def build_screen_analysis_prompt(
@@ -186,13 +189,14 @@ class PromptBuilder:
                 f"构建屏幕分析Prompt时出错：用户提供的模板 '{base_task_description_template}' 中缺少键 {e}。"
                 f"将使用默认任务描述。"
             )
-            task_description = f"发给你的图片是{user_name}的屏幕截图，请针对屏幕内容，用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
+            task_description = f"发给你的图片是{user_name}当前的屏幕截图，请针对屏幕内容用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
         json_output_instruction = (
-            f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，参考一下，避免新的回复出现过多意思相近的词语、句子：\n{recent_screen_logs_str}\n\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
+            f"这张图片是{user_name}的屏幕截图。请根据屏幕内容，用你扮演的角色的口吻发表评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不要直接说“我看到屏幕上...”或“用户正在...”，不要使用符号“「」”、“‘’”、，也不要包含（笑）（冷笑）等描写，而是更自然地表达，仿佛是你自己的想法，不超过120个字。\n"
+            f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，禁止新的回复出现与这几条回复意思十分相近的词语、句子：\n{recent_screen_logs_str}\n\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
             "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way,and use chinese in here.\n"
             f"emotion: This is your current emotion. Its value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
-            f"text_japanese: str | null, the Japanese version of the content in the 'text' field.\n"
+            f"text_japanese: str, the Japanese version of the content in the 'text' field.\n"
             "\nJSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
@@ -201,6 +205,7 @@ class PromptBuilder:
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复."
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"
+        logger.info(f"{final_prompt}")
         return final_prompt
 
     def build_hierarchical_summary_prompt(
