@@ -14,6 +14,8 @@ from typing import Optional, List, Tuple, Set, Dict, Any
 from itertools import combinations
 from .memory_config import MemoryConfig
 from ..utils.prompt_builder import PromptBuilder
+import uuid
+import json
 
 try:
     from ..llm.llm_request import LLM_request, GeminiSDKResponse
@@ -93,29 +95,62 @@ class MemoryGraph:
     def add_dot(
         self,
         concept: str,
-        memory_summary: str,
+        hierarchical_summaries_data: Dict[str, Tuple[str, Optional[List[float]]]],
         concept_embedding: Optional[List[float]] = None,
-        summary_embedding: Optional[List[float]] = None,
+        event_id: Optional[str] = None,
+        source_info: Optional[Dict[str, Any]] = None,
     ):
         current_time = datetime.now().timestamp()
-        memory_item_tuple = (memory_summary, summary_embedding)
+        new_event_id = event_id if event_id else str(uuid.uuid4())
+        new_memory_event = {
+            "event_id": new_event_id,
+            "hierarchical_summaries": hierarchical_summaries_data,
+            "source_info": source_info if source_info else {},
+            "created_time": current_time,
+            "last_accessed_time": current_time,
+        }
         if concept in self.G:
-            if "memory_items" not in self.G.nodes[concept] or not isinstance(
-                self.G.nodes[concept]["memory_items"], list
+            if "memory_events" not in self.G.nodes[concept] or not isinstance(
+                self.G.nodes[concept]["memory_events"], list
             ):
-                self.G.nodes[concept]["memory_items"] = []
-            existing_summaries = [
-                item[0] for item in self.G.nodes[concept]["memory_items"]
-            ]
-            if memory_summary not in existing_summaries:
-                self.G.nodes[concept]["memory_items"].append(memory_item_tuple)
+                self.G.nodes[concept]["memory_events"] = []
+            existing_l1_summaries = []
+            for mev in self.G.nodes[concept]["memory_events"]:
+                hs = mev.get("hierarchical_summaries", {})
+                l1_data = hs.get("L1_core_sentence")
+                if (
+                    l1_data
+                    and isinstance(l1_data, tuple)
+                    and len(l1_data) > 0
+                    and isinstance(l1_data[0], str)
+                ):
+                    existing_l1_summaries.append(l1_data[0])
+            current_l1_summary_tuple = hierarchical_summaries_data.get(
+                "L1_core_sentence"
+            )
+            current_l1_summary_text = ""
+            if (
+                current_l1_summary_tuple
+                and isinstance(current_l1_summary_tuple, tuple)
+                and len(current_l1_summary_tuple) > 0
+            ):
+                current_l1_summary_text = current_l1_summary_tuple[0]
+            if (
+                current_l1_summary_text
+                and current_l1_summary_text not in existing_l1_summaries
+            ):
+                self.G.nodes[concept]["memory_events"].append(new_memory_event)
                 self.G.nodes[concept]["last_modified"] = current_time
                 logger.debug(
-                    f"为概念 '{concept}' 添加新记忆项: '{memory_summary[:50]}...'"
+                    f"为概念 '{concept}' 添加新记忆事件 (ID: {new_event_id}): '{current_l1_summary_text[:50]}...'"
+                )
+            elif not current_l1_summary_text:
+                logger.warning(
+                    f"尝试为概念 '{concept}' 添加记忆事件，但L1摘要为空，已跳过。"
                 )
             else:
                 logger.debug(
-                    f"概念 '{concept}' 已存在记忆项: '{memory_summary[:50]}...'，未重复添加。"
+                    f"概念 '{concept}' 已存在相似L1摘要的记忆事件: '{current_l1_summary_text[:50]}...'，未重复添加。"
                 )
             if "created_time" not in self.G.nodes[concept]:
                 self.G.nodes[concept]["created_time"] = current_time
@@ -128,38 +163,78 @@ class MemoryGraph:
                 logger.debug(f"为概念 '{concept}' 添加/更新了概念嵌入。")
         else:
             node_attrs = {
-                "memory_items": [memory_item_tuple],
+                "memory_events": [new_memory_event],
                 "embedding": concept_embedding,
                 "created_time": current_time,
                 "last_modified": current_time,
             }
             self.G.add_node(concept, **node_attrs)
-            logger.info(f"创建新概念节点: '{concept}' 并添加了首个记忆项。")
+            current_l1_summary_tuple = hierarchical_summaries_data.get(
+                "L1_core_sentence"
+            )
+            current_l1_summary_text = ""
+            if (
+                current_l1_summary_tuple
+                and isinstance(current_l1_summary_tuple, tuple)
+                and len(current_l1_summary_tuple) > 0
+            ):
+                current_l1_summary_text = current_l1_summary_tuple[0]
+            logger.info(
+                f"创建新概念节点: '{concept}' 并添加了首个记忆事件 (L1: '{current_l1_summary_text[:50]}...')。"
+            )
 
     def get_dot(self, concept: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         if concept in self.G:
             original_node_data = self.G.nodes[concept]
-            mem_items = original_node_data.get("memory_items", [])
-            if not isinstance(mem_items, list):
+            memory_events = original_node_data.get("memory_events", [])
+            if not isinstance(memory_events, list):
                 logger.warning(
-                    f"概念 '{concept}' 的 memory_items 格式不正确 ({type(mem_items)})，将返回空列表。"
+                    f"概念 '{concept}' 的 memory_events 格式不正确 ({type(memory_events)})，将返回空列表。"
                 )
-                mem_items = []
-            validated_items = []
-            for item in mem_items:
-                if (
-                    isinstance(item, tuple)
-                    and len(item) == 2
-                    and isinstance(item[0], str)
-                    and (item[1] is None or isinstance(item[1], list))
-                ):
-                    validated_items.append(item)
-                else:
+                memory_events = []
+            validated_events = []
+            for event_idx, event_item in enumerate(memory_events):
+                if not isinstance(event_item, dict):
                     logger.warning(
-                        f"概念 '{concept}' 中发现格式不正确的记忆项: {item} (类型: {type(item)})，已跳过。"
+                        f"概念 '{concept}' 中发现格式不正确的记忆事件 (非字典): {event_item}，已跳过。"
                     )
+                    continue
+                event_id = event_item.get("event_id", f"missing_id_{event_idx}")
+                hierarchical_summaries = event_item.get("hierarchical_summaries", {})
+                validated_hierarchical_summaries = {}
+                valid_event_structure = True
+                if not isinstance(hierarchical_summaries, dict):
+                    logger.warning(
+                        f"概念 '{concept}', 事件 '{event_id}' 的 hierarchical_summaries 格式不正确 (非字典): {hierarchical_summaries}，已跳过此事件。"
+                    )
+                    valid_event_structure = False
+                else:
+                    for level, summary_tuple in hierarchical_summaries.items():
+                        if (
+                            isinstance(summary_tuple, tuple)
+                            and len(summary_tuple) == 2
+                            and isinstance(summary_tuple[0], str)
+                            and (
+                                summary_tuple[1] is None
+                                or isinstance(summary_tuple[1], list)
+                            )
+                        ):
+                            validated_hierarchical_summaries[level] = summary_tuple
+                        else:
+                            logger.warning(
+                                f"概念 '{concept}', 事件 '{event_id}', 层级 '{level}' 的摘要格式不正确: {summary_tuple} (类型: {type(summary_tuple)})，已跳过此层级。"
+                            )
+                if valid_event_structure:
+                    validated_event = {
+                        "event_id": event_id,
+                        "hierarchical_summaries": validated_hierarchical_summaries,
+                        "source_info": event_item.get("source_info", {}),
+                        "created_time": event_item.get("created_time"),
+                        "last_accessed_time": event_item.get("last_accessed_time"),
+                    }
+                    validated_events.append(validated_event)
             data_to_return = {
-                "memory_items": validated_items,
+                "memory_events": validated_events,
                 "embedding": original_node_data.get("embedding"),
                 "created_time": original_node_data.get("created_time"),
                 "last_modified": original_node_data.get("last_modified"),
@@ -168,7 +243,7 @@ class MemoryGraph:
         return None
 
     def get_related_summaries(
-        self, topic: str, depth: int = 1
+        self, topic: str, depth: int = 1, summary_level: str = "L1_core_sentence"
     ) -> Tuple[List[str], List[str]]:
         if topic not in self.G:
             return [], []
@@ -176,26 +251,32 @@ class MemoryGraph:
         node_data_tuple = self.get_dot(topic)
         if node_data_tuple:
             _, node_data = node_data_tuple
-            first_layer_summaries.extend(
-                [
-                    item[0]
-                    for item in node_data.get("memory_items", [])
-                    if isinstance(item, tuple) and len(item) > 0
-                ]
-            )
+            for event in node_data.get("memory_events", []):
+                hs = event.get("hierarchical_summaries", {})
+                summary_tuple = hs.get(summary_level)
+                if (
+                    summary_tuple
+                    and isinstance(summary_tuple, tuple)
+                    and len(summary_tuple) > 0
+                    and isinstance(summary_tuple[0], str)
+                ):
+                    first_layer_summaries.append(summary_tuple[0])
         if depth >= 2:
             try:
                 for neighbor in self.G.neighbors(topic):
                     neighbor_data_tuple = self.get_dot(neighbor)
                     if neighbor_data_tuple:
                         _, neighbor_data = neighbor_data_tuple
-                        second_layer_summaries.extend(
-                            [
-                                item[0]
-                                for item in neighbor_data.get("memory_items", [])
-                                if isinstance(item, tuple) and len(item) > 0
-                            ]
-                        )
+                        for event in neighbor_data.get("memory_events", []):
+                            hs = event.get("hierarchical_summaries", {})
+                            summary_tuple = hs.get(summary_level)
+                            if (
+                                summary_tuple
+                                and isinstance(summary_tuple, tuple)
+                                and len(summary_tuple) > 0
+                                and isinstance(summary_tuple[0], str)
+                            ):
+                                second_layer_summaries.append(summary_tuple[0])
             except nx.NetworkXError as e:
                 logger.error(f"获取 '{topic}' 的邻居节点时出错: {e}")
         return first_layer_summaries, second_layer_summaries
@@ -204,38 +285,47 @@ class MemoryGraph:
     def dots(self) -> List[Optional[Tuple[str, Dict[str, Any]]]]:
         return [self.get_dot(node) for node in self.G.nodes()]
 
-    def forget_topic_summary(self, topic: str) -> Optional[str]:
+    def forget_memory_event(self, topic: str) -> Optional[str]:
         if topic not in self.G:
+            logger.warning(f"尝试遗忘主题 '{topic}' 时，节点不存在。")
             return None
         node_data_tuple = self.get_dot(topic)
         if not node_data_tuple:
             if topic in self.G:
                 self.G.remove_node(topic)
-            logger.warning(
-                f"尝试遗忘主题 '{topic}' 时 get_dot 返回 None 或节点数据损坏。"
-            )
+                logger.warning(
+                    f"主题 '{topic}' get_dot 返回 None，节点数据可能损坏，已移除节点。"
+                )
             return None
-        _, node_data = node_data_tuple
-        memory_items_tuples = node_data.get("memory_items", [])
-        if memory_items_tuples:
-            removed_idx = random.randrange(len(memory_items_tuples))
-            removed_summary_text = memory_items_tuples.pop(removed_idx)[0]
-            if not memory_items_tuples:
-                self.G.remove_node(topic)
-                logger.info(
-                    f"主题 '{topic}' 最后记忆项 '{removed_summary_text[:50]}...' 已遗忘，节点移除。"
-                )
-            else:
-                self.G.nodes[topic]["memory_items"] = memory_items_tuples
-                self.G.nodes[topic]["last_modified"] = datetime.now().timestamp()
-                logger.info(
-                    f"主题 '{topic}' 记忆项 '{removed_summary_text[:50]}...' 已遗忘。剩余 {len(memory_items_tuples)} 项。"
-                )
-            return removed_summary_text
-        else:
+        _concept_name, node_data = node_data_tuple
+        memory_events = node_data.get("memory_events", [])
+        if not memory_events:
             self.G.remove_node(topic)
-            logger.info(f"主题 '{topic}' 无可遗忘记忆项，节点移除。")
+            logger.info(f"主题 '{topic}' 无可遗忘的记忆事件，节点移除。")
             return None
+        removed_event_idx = random.randrange(len(memory_events))
+        removed_event = memory_events.pop(removed_event_idx)
+        removed_summary_text = "一个记忆事件被移除"
+        hs = removed_event.get("hierarchical_summaries", {})
+        l1_summary_tuple = hs.get("L1_core_sentence")
+        if (
+            l1_summary_tuple
+            and isinstance(l1_summary_tuple, tuple)
+            and len(l1_summary_tuple) > 0
+        ):
+            removed_summary_text = l1_summary_tuple[0]
+        if not memory_events:
+            self.G.remove_node(topic)
+            logger.info(
+                f"主题 '{topic}' 的最后一个记忆事件 (L1: '{removed_summary_text[:50]}...') 已遗忘，节点移除。"
+            )
+        else:
+            self.G.nodes[topic]["memory_events"] = memory_events
+            self.G.nodes[topic]["last_modified"] = datetime.now().timestamp()
+            logger.info(
+                f"主题 '{topic}' 的一个记忆事件 (L1: '{removed_summary_text[:50]}...') 已遗忘。剩余 {len(memory_events)} 个事件。"
+            )
+        return removed_summary_text
 
 
 class EntorhinalCortex:
@@ -323,14 +413,14 @@ class EntorhinalCortex:
         if self.db is None:
             logger.error("数据库未初始化，无法同步记忆到数据库。")
             return
-        mem_graph = self.memory_graph.G
-        memory_nodes_data = {}
-        for node_concept in list(mem_graph.nodes()):
-            node_tuple = self.memory_graph.get_dot(node_concept)
+        mem_graph_instance = self.memory_graph
+        memory_nodes_data_from_graph: Dict[str, Dict[str, Any]] = {}
+        for node_concept in list(mem_graph_instance.G.nodes()):
+            node_tuple = mem_graph_instance.get_dot(node_concept)
             if node_tuple:
-                memory_nodes_data[node_tuple[0]] = node_tuple[1]
+                memory_nodes_data_from_graph[node_tuple[0]] = node_tuple[1]
         memory_edges_data = {}
-        for u, v, data in mem_graph.edges(data=True):
+        for u, v, data in mem_graph_instance.G.edges(data=True):
             memory_edges_data[tuple(sorted((u, v)))] = {
                 "source": u,
                 "target": v,
@@ -338,9 +428,9 @@ class EntorhinalCortex:
             }
         db_nodes_map, db_edges_map = {}, {}
         try:
-            if memory_nodes_data:
+            if memory_nodes_data_from_graph:
                 for doc in self.db.graph_data_nodes.find(
-                    {"concept": {"$in": list(memory_nodes_data.keys())}}
+                    {"concept": {"$in": list(memory_nodes_data_from_graph.keys())}}
                 ):
                     db_nodes_map[doc["concept"]] = doc
             if memory_edges_data:
@@ -361,21 +451,22 @@ class EntorhinalCortex:
             [],
         )
         current_time_ts = datetime.now().timestamp()
-        for concept, data in memory_nodes_data.items():
-            memory_items = data.get("memory_items", [])
-            summaries = [
-                item[0]
-                for item in memory_items
-                if isinstance(item, tuple) and len(item) > 0
-            ]
-            node_hash = self.hippocampus.calculate_node_hash(concept, summaries)
+        for concept, data_from_graph_node in memory_nodes_data_from_graph.items():
+            current_memory_events = data_from_graph_node.get("memory_events", [])
+            node_hash = self.hippocampus.calculate_node_hash(
+                concept, current_memory_events
+            )
             payload = {
                 "concept": concept,
-                "memory_items": memory_items,
-                "embedding": data.get("embedding"),
+                "memory_events": current_memory_events,
+                "embedding": data_from_graph_node.get("embedding"),
                 "hash": node_hash,
-                "created_time": data.get("created_time", current_time_ts),
-                "last_modified": data.get("last_modified", current_time_ts),
+                "created_time": data_from_graph_node.get(
+                    "created_time", current_time_ts
+                ),
+                "last_modified": data_from_graph_node.get(
+                    "last_modified", current_time_ts
+                ),
             }
             db_node = db_nodes_map.get(concept)
             if not db_node:
@@ -383,7 +474,7 @@ class EntorhinalCortex:
             elif (
                 db_node.get("hash") != node_hash
                 or db_node.get("embedding") != payload["embedding"]
-                or db_node.get("memory_items") != payload["memory_items"]
+                or db_node.get("memory_events") != payload["memory_events"]
             ):
                 nodes_to_update.append(
                     UpdateOne({"concept": concept}, {"$set": payload})
@@ -410,7 +501,7 @@ class EntorhinalCortex:
                     UpdateOne({"source": key[0], "target": key[1]}, {"$set": payload})
                 )
         nodes_to_delete_names = list(
-            set(db_nodes_map.keys()) - set(memory_nodes_data.keys())
+            set(db_nodes_map.keys()) - set(memory_nodes_data_from_graph.keys())
         )
         edges_to_delete_db_keys = list(
             set(db_edges_map.keys()) - set(memory_edges_data.keys())
@@ -495,141 +586,212 @@ class EntorhinalCortex:
             return
         self.memory_graph.G.clear()
         current_time_ts = datetime.now().timestamp()
-        nodes_needing_concept_emb, items_needing_summary_emb = [], {}
+        nodes_needing_concept_emb: List[str] = []
+        items_needing_hier_summary_emb: Dict[str, List[Tuple[str, str]]] = {}
         node_db_updates, edge_db_updates = [], []
         try:
             db_nodes = list(self.db.graph_data_nodes.find())
         except Exception as e:
-            logger.error(f"读取节点时出错: {e}", exc_info=True)
+            logger.error(f"从数据库读取节点时出错: {e}", exc_info=True)
             return
         for node_doc in db_nodes:
             concept = node_doc["concept"]
-            db_mem_items = node_doc.get("memory_items", [])
+            db_memory_events_raw = node_doc.get("memory_events", [])
             concept_emb = node_doc.get("embedding")
-            valid_graph_items, item_indices_need_emb, db_item_struct_change = (
-                [],
-                [],
-                False,
-            )
-            if not isinstance(db_mem_items, list):
-                db_mem_items = [db_mem_items] if isinstance(db_mem_items, str) else []
-                db_item_struct_change = True
-            for idx, item_db in enumerate(db_mem_items):
-                s_text, s_emb, item_ok = None, None, False
-                if isinstance(item_db, (tuple, list)) and len(item_db) == 2:
-                    s_text, s_emb = item_db
-                    if not isinstance(s_text, str):
-                        logger.warning(f"节点'{concept}'项{idx}摘要非字符串")
-                        db_item_struct_change = True
-                        continue
-                    if s_emb is not None and not isinstance(s_emb, list):
-                        s_emb = None
-                        db_item_struct_change = True
-                        logger.warning(f"节点'{concept}'项{idx}嵌入无效")
-                    item_ok = True
-                    if isinstance(item_db, list):
-                        db_item_struct_change = True
-                elif isinstance(item_db, str):
-                    s_text, s_emb, item_ok, db_item_struct_change = (
-                        item_db,
-                        None,
-                        True,
-                        True,
-                    )
-                else:
-                    logger.warning(f"节点'{concept}'项{idx}格式无法识别")
-                    db_item_struct_change = True
-                    continue
-                if item_ok:
-                    valid_graph_items.append((s_text, s_emb))
-                    if s_emb is None:
-                        item_indices_need_emb.append(len(valid_graph_items) - 1)
-            if item_indices_need_emb:
-                items_needing_summary_emb[concept] = item_indices_need_emb
-            created, modified, time_payload = (
-                node_doc.get("created_time"),
-                node_doc.get("last_modified"),
-                {},
-            )
-            if created is None:
-                created, time_payload["created_time"] = current_time_ts, current_time_ts
-            if modified is None:
-                modified, time_payload["last_modified"] = (
-                    current_time_ts,
-                    current_time_ts,
+            parsed_graph_memory_events = []
+            db_event_struct_changed_for_node = False
+            if not isinstance(db_memory_events_raw, list):
+                logger.warning(
+                    f"节点 '{concept}' 的 memory_events 在DB中格式非列表 ({type(db_memory_events_raw)})，尝试修正。"
                 )
-            db_updates = {}
-            if time_payload:
-                db_updates.update(time_payload)
-            if db_item_struct_change:
-                db_updates["memory_items"] = valid_graph_items
-            if db_updates:
+                db_memory_events_raw = []
+                db_event_struct_changed_for_node = True
+            for event_idx, event_doc_item in enumerate(db_memory_events_raw):
+                if not isinstance(event_doc_item, dict):
+                    logger.warning(
+                        f"节点 '{concept}', 事件索引 {event_idx} 格式非字典 ({type(event_doc_item)})，已跳过。"
+                    )
+                    db_event_struct_changed_for_node = True
+                    continue
+                event_id = event_doc_item.get("event_id")
+                if not event_id:
+                    event_id = str(uuid.uuid4())
+                    event_doc_item["event_id"] = event_id
+                    logger.info(
+                        f"节点 '{concept}', 事件索引 {event_idx} 缺少event_id, 已生成: {event_id}"
+                    )
+                    db_event_struct_changed_for_node = True
+                raw_hier_summaries = event_doc_item.get("hierarchical_summaries", {})
+                parsed_hier_summaries_for_graph = {}
+                db_hier_summary_struct_changed_for_event = False
+                if not isinstance(raw_hier_summaries, dict):
+                    logger.warning(
+                        f"节点 '{concept}', 事件ID '{event_id}' 的 hierarchical_summaries 非字典 ({type(raw_hier_summaries)})，已跳过此事件的摘要。"
+                    )
+                    db_hier_summary_struct_changed_for_event = True
+                    raw_hier_summaries = {}
+                for level_name, summary_data_from_db in raw_hier_summaries.items():
+                    s_text, s_emb = None, None
+                    item_ok_for_graph = False
+                    if (
+                        isinstance(summary_data_from_db, (tuple, list))
+                        and len(summary_data_from_db) == 2
+                    ):
+                        s_text, s_emb = summary_data_from_db
+                        if not isinstance(s_text, str):
+                            logger.warning(
+                                f"节点'{concept}', 事件'{event_id}', 层级'{level_name}'摘要文本非字符串。"
+                            )
+                            db_hier_summary_struct_changed_for_event = True
+                            continue
+                        if s_emb is not None and not isinstance(s_emb, list):
+                            logger.warning(
+                                f"节点'{concept}', 事件'{event_id}', 层级'{level_name}'嵌入无效，已置为None。"
+                            )
+                            s_emb = None
+                            db_hier_summary_struct_changed_for_event = True
+                        item_ok_for_graph = True
+                        if isinstance(summary_data_from_db, list):
+                            db_hier_summary_struct_changed_for_event = True
+                    elif isinstance(summary_data_from_db, str):
+                        s_text, s_emb, item_ok_for_graph = (
+                            summary_data_from_db,
+                            None,
+                            True,
+                        )
+                        db_hier_summary_struct_changed_for_event = True
+                        logger.info(
+                            f"节点'{concept}', 事件'{event_id}', 层级'{level_name}'只有文本，将补嵌入。"
+                        )
+                    else:
+                        logger.warning(
+                            f"节点'{concept}', 事件'{event_id}', 层级'{level_name}'格式无法识别: {type(summary_data_from_db)}。"
+                        )
+                        db_hier_summary_struct_changed_for_event = True
+                        continue
+                    if item_ok_for_graph:
+                        parsed_hier_summaries_for_graph[level_name] = (s_text, s_emb)
+                        if s_emb is None and s_text:
+                            if concept not in items_needing_hier_summary_emb:
+                                items_needing_hier_summary_emb[concept] = []
+                            items_needing_hier_summary_emb[concept].append(
+                                (event_id, level_name)
+                            )
+                if db_hier_summary_struct_changed_for_event:
+                    event_doc_item["hierarchical_summaries"] = (
+                        parsed_hier_summaries_for_graph
+                    )
+                    db_event_struct_changed_for_node = True
+                parsed_graph_memory_events.append(
+                    {
+                        "event_id": event_id,
+                        "hierarchical_summaries": parsed_hier_summaries_for_graph,
+                        "source_info": event_doc_item.get("source_info", {}),
+                        "created_time": event_doc_item.get(
+                            "created_time", current_time_ts
+                        ),
+                        "last_accessed_time": event_doc_item.get(
+                            "last_accessed_time", current_time_ts
+                        ),
+                    }
+                )
+            created_time = node_doc.get("created_time")
+            last_modified_time = node_doc.get("last_modified")
+            time_payload_for_db_update = {}
+            if created_time is None:
+                created_time = current_time_ts
+                time_payload_for_db_update["created_time"] = current_time_ts
+            if last_modified_time is None:
+                last_modified_time = current_time_ts
+                time_payload_for_db_update["last_modified"] = current_time_ts
+            db_updates_for_current_node = {}
+            if time_payload_for_db_update:
+                db_updates_for_current_node.update(time_payload_for_db_update)
+            if db_event_struct_changed_for_node:
+                db_updates_for_current_node["memory_events"] = (
+                    parsed_graph_memory_events
+                )
+            if db_updates_for_current_node:
                 node_db_updates.append(
-                    UpdateOne({"_id": node_doc["_id"]}, {"$set": db_updates})
+                    UpdateOne(
+                        {"_id": node_doc["_id"]}, {"$set": db_updates_for_current_node}
+                    )
                 )
             if concept_emb is None:
                 nodes_needing_concept_emb.append(concept)
             self.memory_graph.G.add_node(
                 concept,
-                memory_items=valid_graph_items,
+                memory_events=parsed_graph_memory_events,
                 embedding=concept_emb,
-                created_time=created,
-                last_modified=modified,
+                created_time=created_time,
+                last_modified=last_modified_time,
             )
         try:
             db_edges = list(self.db.graph_data_edges.find())
         except Exception as e:
-            logger.error(f"读取边时出错: {e}", exc_info=True)
+            logger.error(f"从数据库读取边时出错: {e}", exc_info=True)
             db_edges = []
         for edge_doc in db_edges:
             s, t = edge_doc["source"], edge_doc["target"]
             if s not in self.memory_graph.G or t not in self.memory_graph.G:
+                logger.debug(f"跳过边 ({s}-{t})，因为一个或两个节点在图中不存在。")
                 continue
-            strength, created, modified, time_payload = (
-                edge_doc.get("strength", 1),
-                edge_doc.get("created_time"),
-                edge_doc.get("last_modified"),
-                {},
-            )
-            if created is None:
-                created, time_payload["created_time"] = current_time_ts, current_time_ts
-            if modified is None:
-                modified, time_payload["last_modified"] = (
-                    current_time_ts,
-                    current_time_ts,
-                )
-            if time_payload:
+            strength = edge_doc.get("strength", 1)
+            created_time_edge = edge_doc.get("created_time")
+            last_modified_time_edge = edge_doc.get("last_modified")
+            time_payload_edge_update = {}
+            if created_time_edge is None:
+                created_time_edge = current_time_ts
+                time_payload_edge_update["created_time"] = current_time_ts
+            if last_modified_time_edge is None:
+                last_modified_time_edge = current_time_ts
+                time_payload_edge_update["last_modified"] = current_time_ts
+            if time_payload_edge_update:
                 edge_db_updates.append(
-                    UpdateOne({"_id": edge_doc["_id"]}, {"$set": time_payload})
+                    UpdateOne(
+                        {"_id": edge_doc["_id"]}, {"$set": time_payload_edge_update}
+                    )
                 )
             self.memory_graph.G.add_edge(
-                s, t, strength=strength, created_time=created, last_modified=modified
+                s,
+                t,
+                strength=strength,
+                created_time=created_time_edge,
+                last_modified=last_modified_time_edge,
             )
         if node_db_updates:
             try:
                 self.db.graph_data_nodes.bulk_write(node_db_updates, ordered=False)
-                logger.info(f"修正了{len(node_db_updates)}个DB节点")
+                logger.info(
+                    f"从DB加载时，修正并更新了 {len(node_db_updates)} 个数据库中的节点结构。"
+                )
             except Exception as e:
-                logger.error(f"修正DB节点失败: {e}", exc_info=True)
+                logger.error(f"从DB加载时，修正数据库节点结构失败: {e}", exc_info=True)
         if edge_db_updates:
             try:
                 self.db.graph_data_edges.bulk_write(edge_db_updates, ordered=False)
-                logger.info(f"修正了{len(edge_db_updates)}条DB边")
+                logger.info(
+                    f"从DB加载时，修正并更新了 {len(edge_db_updates)} 条数据库中的边结构。"
+                )
             except Exception as e:
-                logger.error(f"修正DB边失败: {e}", exc_info=True)
+                logger.error(f"从DB加载时，修正数据库边结构失败: {e}", exc_info=True)
         if nodes_needing_concept_emb:
             self.hippocampus._nodes_needing_embedding_update = list(
                 set(nodes_needing_concept_emb)
             )
-        if items_needing_summary_emb:
+        if items_needing_hier_summary_emb:
             self.hippocampus._items_needing_summary_embedding_update = dict(
-                items_needing_summary_emb
+                items_needing_hier_summary_emb
             )
         logger.info(
             f"从DB同步记忆完成。加载 {len(self.memory_graph.G.nodes())} 节点, {len(self.memory_graph.G.edges())} 边。耗时: {time.time()-start_time:.3f}s"
         )
+        total_summary_levels_to_update = sum(
+            len(v)
+            for v in self.hippocampus._items_needing_summary_embedding_update.values()
+        )
         logger.info(
-            f"需补概念嵌入: {len(self.hippocampus._nodes_needing_embedding_update)}。需补摘要嵌入: {sum(len(v) for v in self.hippocampus._items_needing_summary_embedding_update.values())}项。"
+            f"需补概念嵌入: {len(self.hippocampus._nodes_needing_embedding_update)} 个节点。需补层级摘要嵌入: {total_summary_levels_to_update} 个层级。"
         )
 
 
@@ -693,309 +855,465 @@ class ParahippocampalGyrus:
 
     async def operation_build_memory(self):
         start_time = time.time()
-        logger.info("开始构建记忆...")
+        logger.info("开始构建记忆 (层级化)...")
         memory_samples = self.hippocampus.entorhinal_cortex.get_memory_sample()
         if not memory_samples:
             logger.info("无记忆样本，跳过构建。")
             return
-        added_nodes, connected_edges = set(), set()
-        processed_count = 0
-        for i, messages in enumerate(memory_samples):
-            sample_time = time.time()
+        added_nodes_concepts = set()
+        connected_edges_pairs = set()
+        processed_sample_count = 0
+        for i, messages_in_sample in enumerate(memory_samples):
+            sample_process_start_time = time.time()
             logger.info(
-                f"Processing sample {i+1}/{len(memory_samples)}. Raw messages count: {len(messages) if messages else 'None'}"
+                f"处理样本 {i+1}/{len(memory_samples)}. 原始消息数: {len(messages_in_sample) if messages_in_sample else 'None'}"
             )
-            if not messages:
-                logger.info(f"Sample {i+1} is empty. Skipping.")
+            if not messages_in_sample:
+                logger.info(f"样本 {i+1} 为空，跳过。")
                 continue
-            input_text, earliest_ts, latest_ts, valid_msgs = (
+            input_text_for_sample, earliest_ts, latest_ts, valid_msgs_count = (
                 "",
                 float("inf"),
                 float("-inf"),
                 0,
             )
-            for msg_idx, msg in enumerate(messages):
-                txt, ts = msg.get("message_text", ""), msg.get("timestamp")
-                logger.debug(
-                    f"  Sample {i+1}, Msg {msg_idx+1}: Text='{str(txt)[:50]}...', Timestamp='{ts}', Type(txt)={type(txt)}, Type(ts)={type(ts)}"
-                )
+            for msg_idx, msg_data in enumerate(messages_in_sample):
+                txt, ts = msg_data.get("message_text", ""), msg_data.get("timestamp")
+                sender = msg_data.get("sender")
                 if (
                     isinstance(txt, str)
                     and txt.strip()
                     and isinstance(ts, (int, float))
                 ):
-                    logger.debug(f"    Msg {msg_idx+1} is valid. Adding to input_text.")
-                    input_text += f"{txt}\n"
+                    input_text_for_sample += f"{sender}:{txt}\n"
                     earliest_ts = min(earliest_ts, ts)
                     latest_ts = max(latest_ts, ts)
-                    valid_msgs += 1
-                else:
-                    logger.debug(
-                        f"    Msg {msg_idx+1} is NOT valid. Text empty/whitespace after strip: {not txt.strip() if isinstance(txt, str) else 'N/A (not str)'}, Timestamp valid: {isinstance(ts, (int, float))}"
-                    )
-            logger.info(
-                f"Sample {i+1} processing complete. Resulting input_text (first 100 chars): '{input_text[:100]}...', valid_msgs: {valid_msgs}"
-            )
-            if not input_text.strip() or valid_msgs == 0:
-                logger.info(
-                    f"Sample {i+1} resulted in empty/invalid input_text or zero valid messages. Skipping LLM processing for this sample."
-                )
+                    valid_msgs_count += 1
+            if not input_text_for_sample.strip() or valid_msgs_count == 0:
+                logger.info(f"样本 {i+1} 无有效文本内容或消息，跳过LLM处理。")
                 continue
-            processed_count += 1
-            time_info = "时间未知"
+            processed_sample_count += 1
+            time_info_for_summary = "时间未知"
             if earliest_ts != float("inf"):
                 e_dt, l_dt = datetime.fromtimestamp(
                     earliest_ts
                 ), datetime.fromtimestamp(latest_ts)
-                time_info = (
+                time_info_for_summary = (
                     f"{e_dt.year}年, {e_dt.strftime('%m月%d日 %H:%M')}到{l_dt.strftime('%m月%d日 %H:%M')}"
                     if e_dt.year == l_dt.year
                     else f"{e_dt.strftime('%Y年%m月%d日 %H:%M')}到{l_dt.strftime('%Y年%m月%d日 %H:%M')}"
                 )
             try:
-                _, topic_embed_map, similar_map = (
-                    await self.extract_topics_and_find_similar(
-                        input_text, self.config.memory_compress_rate
-                    )
+                (
+                    _original_text,
+                    topic_to_embedding_map,
+                    topic_to_similar_existing_topics_map,
+                ) = await self.extract_topics_and_find_similar(
+                    input_text_for_sample, self.config.memory_compress_rate
                 )
             except Exception as e:
-                logger.error(f"样本{i+1}提取主题失败: {e}", exc_info=True)
+                logger.error(f"样本 {i+1} 提取主题和相似项失败: {e}", exc_info=True)
                 continue
-            if not topic_embed_map:
+            if not topic_to_embedding_map:
+                logger.info(f"样本 {i+1} 未提取到有效主题。")
                 continue
-            logger.info(f"样本{i+1}: 提取到{len(topic_embed_map)}个主题生成摘要。")
-            new_topics_this_sample = []
-            summary_tasks_with_info = []
-            for topic, topic_emb in topic_embed_map.items():
-                summary_tasks_with_info.append(
-                    (
-                        topic,
-                        topic_emb,
-                        self.hippocampus.generate_topic_specific_summary(
-                            input_text, time_info, topic
-                        ),
-                    )
-                )
-            summary_gen_start_ts = time.monotonic()
-            summaries_generated_this_batch = 0
-            for topic, topic_emb, summary_awaitable in summary_tasks_with_info:
+            logger.info(
+                f"样本 {i+1}: 提取到 {len(topic_to_embedding_map)} 个主题，将为它们生成层级摘要。"
+            )
+            newly_added_or_updated_topics_in_this_sample = []
+            for (
+                topic_concept,
+                topic_concept_embedding,
+            ) in topic_to_embedding_map.items():
+                hierarchical_summaries_text_only: Optional[Dict[str, str]] = None
                 try:
-                    topic_summary = await summary_awaitable
-                    summaries_generated_this_batch += 1
-                    if not topic_summary:
-                        logger.warning(f"主题'{topic}'(样本{i+1})摘要为空。")
-                        continue
-                    summary_emb = await self.hippocampus.get_embedding_async(
-                        topic_summary, request_type="memory_summary_embed"
+                    hierarchical_summaries_text_only = (
+                        await self.hippocampus.generate_hierarchical_summaries(
+                            input_text_for_sample, time_info_for_summary, topic_concept
+                        )
                     )
-                    self.memory_graph.add_dot(
-                        topic, topic_summary, topic_emb, summary_emb
-                    )
-                    added_nodes.add(topic)
-                    new_topics_this_sample.append(topic)
-                    elapsed_batch = time.monotonic() - summary_gen_start_ts
-                    expected_time = (
-                        summaries_generated_this_batch
-                        * self.config.rpm_limit_delay_summary_sec
-                    )
-                    wait = max(0, expected_time - elapsed_batch)
-                    if wait > 0:
-                        await asyncio.sleep(wait)
                 except Exception as e:
                     logger.error(
-                        f"主题'{topic}'(样本{i+1})摘要/嵌入错误: {e}", exc_info=True
+                        f"为主题 '{topic_concept}' (样本 {i+1}) 生成层级摘要文本时出错: {e}",
+                        exc_info=True,
                     )
-            if len(new_topics_this_sample) >= 2:
-                for t1, t2 in combinations(new_topics_this_sample, 2):
+                    continue
+                if not hierarchical_summaries_text_only or not any(
+                    hierarchical_summaries_text_only.values()
+                ):
+                    logger.warning(
+                        f"主题 '{topic_concept}' (样本 {i+1}) 的层级摘要文本为空或无效。"
+                    )
+                    continue
+                hierarchical_summaries_with_embeddings: Dict[
+                    str, Tuple[str, Optional[List[float]]]
+                ] = {}
+                has_at_least_one_summary_with_embedding = False
+                summary_gen_start_ts = time.monotonic()
+                summaries_embedded_this_batch = 0
+                for (
+                    level_name,
+                    summary_text,
+                ) in hierarchical_summaries_text_only.items():
+                    if not summary_text or not summary_text.strip():
+                        hierarchical_summaries_with_embeddings[level_name] = (
+                            summary_text,
+                            None,
+                        )
+                        continue
+                    summary_embedding_vec = await self.hippocampus.get_embedding_async(
+                        summary_text, request_type=f"memory_sum_embed_{level_name}"
+                    )
+                    hierarchical_summaries_with_embeddings[level_name] = (
+                        summary_text,
+                        summary_embedding_vec,
+                    )
+                    if summary_embedding_vec:
+                        has_at_least_one_summary_with_embedding = True
+                    summaries_embedded_this_batch += 1
+                    elapsed_batch_time = time.monotonic() - summary_gen_start_ts
+                    expected_time_for_rpms = (
+                        summaries_embedded_this_batch
+                        * self.config.rpm_limit_delay_summary_sec
+                    )
+                    wait_time_needed = max(
+                        0, expected_time_for_rpms - elapsed_batch_time
+                    )
+                    if wait_time_needed > 0:
+                        await asyncio.sleep(wait_time_needed)
+                if (
+                    not has_at_least_one_summary_with_embedding
+                    and not hierarchical_summaries_with_embeddings.get(
+                        "L1_core_sentence", (None, None)
+                    )[1]
+                ):
+                    logger.warning(
+                        f"主题 '{topic_concept}' (样本 {i+1}) 所有层级摘要均未能成功获取嵌入，跳过此主题。"
+                    )
+                    continue
+                current_event_id = f"event_{i}_{topic_concept.replace(' ','_')}_{str(uuid.uuid4())[:8]}"
+                source_details = {
+                    "sample_index": i,
+                    "valid_message_count": valid_msgs_count,
+                }
+                self.memory_graph.add_dot(
+                    concept=topic_concept,
+                    hierarchical_summaries_data=hierarchical_summaries_with_embeddings,
+                    concept_embedding=topic_concept_embedding,
+                    event_id=current_event_id,
+                    source_info=source_details,
+                )
+                added_nodes_concepts.add(topic_concept)
+                newly_added_or_updated_topics_in_this_sample.append(topic_concept)
+            if len(newly_added_or_updated_topics_in_this_sample) >= 2:
+                for t1, t2 in combinations(
+                    newly_added_or_updated_topics_in_this_sample, 2
+                ):
                     self.memory_graph.connect_dot(t1, t2)
-                    connected_edges.add("-".join(sorted((t1, t2))))
-            for topic in new_topics_this_sample:
-                if topic in similar_map:
-                    for sim_topic, _ in similar_map[topic]:
-                        if self.memory_graph.G.has_node(sim_topic):
-                            self.memory_graph.connect_dot(topic, sim_topic)
-                            connected_edges.add("-".join(sorted((topic, sim_topic))))
-            logger.info(f"样本{i+1}处理耗时: {time.time()-sample_time:.2f}s")
-        if processed_count > 0 and (added_nodes or connected_edges):
+                    connected_edges_pairs.add("-".join(sorted((t1, t2))))
+            for topic_concept in newly_added_or_updated_topics_in_this_sample:
+                if topic_concept in topic_to_similar_existing_topics_map:
+                    for (
+                        similar_existing_topic,
+                        _similarity_score,
+                    ) in topic_to_similar_existing_topics_map[topic_concept]:
+                        if self.memory_graph.G.has_node(similar_existing_topic):
+                            self.memory_graph.connect_dot(
+                                topic_concept, similar_existing_topic
+                            )
+                            connected_edges_pairs.add(
+                                "-".join(
+                                    sorted((topic_concept, similar_existing_topic))
+                                )
+                            )
             logger.info(
-                f"构建处理了{processed_count}样本。新增/更新概念:{len(added_nodes)}, 新增/强化连接:{len(connected_edges)}。同步DB..."
+                f"样本 {i+1} 处理耗时: {time.time() - sample_process_start_time:.2f}s"
+            )
+        if processed_sample_count > 0 and (
+            added_nodes_concepts or connected_edges_pairs
+        ):
+            logger.info(
+                f"构建记忆处理了 {processed_sample_count} 个有效样本。"
+                f"新增/更新概念数: {len(added_nodes_concepts)}, "
+                f"新增/强化连接数: {len(connected_edges_pairs)}。即将同步到数据库..."
             )
             await self.hippocampus.entorhinal_cortex.sync_memory_to_db()
         else:
-            logger.info("本次构建无有效样本或无节点/连接变化，跳过同步。")
-        logger.info(f"记忆构建完成，总耗时: {time.time()-start_time:.2f}s")
+            logger.info(
+                "本次构建记忆无有效样本处理或无图节点/连接变化，跳过数据库同步。"
+            )
+        logger.info(f"记忆构建 (层级化) 完成，总耗时: {time.time() - start_time:.2f}s")
 
     async def operation_forget_topic(self, percentage: Optional[float] = None):
         start_time = time.time()
         eff_percentage = (
             percentage
-            if percentage is not None
+            if percentage is not None and 0 < percentage <= 1
             else self.config.memory_forget_percentage
         )
-        if not 0 < eff_percentage <= 1:
-            eff_percentage = self.config.memory_forget_percentage
-        nodes, edges = list(self.memory_graph.G.nodes()), list(
-            self.memory_graph.G.edges()
-        )
-        if not nodes and not edges:
-            logger.info("记忆图为空，无需遗忘。")
+        nodes_in_graph = list(self.memory_graph.G.nodes())
+        edges_in_graph = list(self.memory_graph.G.edges())
+        if not nodes_in_graph and not edges_in_graph:
+            logger.info("记忆图为空，无需执行遗忘操作。")
             return
-        n_check, e_check = (max(1, int(len(nodes) * eff_percentage)) if nodes else 0), (
-            max(1, int(len(edges) * eff_percentage)) if edges else 0
+        num_nodes_to_check = (
+            max(1, int(len(nodes_in_graph) * eff_percentage)) if nodes_in_graph else 0
+        )
+        num_edges_to_check = (
+            max(1, int(len(edges_in_graph) * eff_percentage)) if edges_in_graph else 0
         )
         logger.info(
-            f"遗忘操作: 检查 {n_check}/{len(nodes)} 节点, {e_check}/{len(edges)} 边。"
+            f"遗忘操作: 检查 {num_nodes_to_check}/{len(nodes_in_graph)} 个节点, "
+            f"{num_edges_to_check}/{len(edges_in_graph)} 条边。"
         )
-        if n_check == 0 and e_check == 0:
-            logger.info("需检查节点/边数为0，跳过遗忘。")
+        if num_nodes_to_check == 0 and num_edges_to_check == 0:
+            logger.info("需检查的节点和边数量均为0，跳过遗忘。")
             return
-        nodes_sample = random.sample(nodes, n_check) if n_check > 0 else []
-        edges_sample = random.sample(edges, e_check) if e_check > 0 else []
-        edge_chg, node_chg = {"weakened": [], "removed": []}, {
-            "summary_removed": [],
-            "node_removed": [],
-        }
-        now_ts = datetime.now().timestamp()
-        edge_forget_thresh = self.config.memory_forget_time_hours * 3600
-        node_sum_forget_thresh = self.config.node_summary_forget_time_hours * 3600
-        for u, v in edges_sample:
+        nodes_sample_for_forget = (
+            random.sample(nodes_in_graph, num_nodes_to_check)
+            if num_nodes_to_check > 0
+            else []
+        )
+        edges_sample_for_forget = (
+            random.sample(edges_in_graph, num_edges_to_check)
+            if num_edges_to_check > 0
+            else []
+        )
+        edge_changes = {"weakened": [], "removed": []}
+        node_changes = {"memory_event_removed_from_node": [], "node_itself_removed": []}
+        current_timestamp = datetime.now().timestamp()
+        edge_forget_threshold_seconds = self.config.memory_forget_time_hours * 3600
+        node_event_forget_threshold_seconds = (
+            self.config.node_summary_forget_time_hours * 3600
+        )
+        for u, v in edges_sample_for_forget:
             if not self.memory_graph.G.has_edge(u, v):
                 continue
             edge_data = self.memory_graph.G[u][v]
-            if now_ts - edge_data.get("last_modified", 0) > edge_forget_thresh:
-                strength = edge_data.get("strength", 1) - 1
-                if strength <= 0:
+            if (
+                current_timestamp - edge_data.get("last_modified", 0)
+                > edge_forget_threshold_seconds
+            ):
+                current_strength = edge_data.get("strength", 1) - 1
+                if current_strength <= 0:
                     self.memory_graph.G.remove_edge(u, v)
-                    edge_chg["removed"].append(f"{u}-{v}")
+                    edge_changes["removed"].append(f"{u}-{v}")
                 else:
-                    self.memory_graph.G[u][v]["strength"] = strength
-                    self.memory_graph.G[u][v]["last_modified"] = now_ts
-                    edge_chg["weakened"].append(f"{u}-{v} (S:{strength+1}->{strength})")
-        for node_name in nodes_sample:
+                    self.memory_graph.G[u][v]["strength"] = current_strength
+                    self.memory_graph.G[u][v]["last_modified"] = current_timestamp
+                    edge_changes["weakened"].append(
+                        f"{u}-{v} (S:{current_strength+1}->{current_strength})"
+                    )
+        for node_name in nodes_sample_for_forget:
             if node_name not in self.memory_graph.G:
                 continue
-            node_data_t = self.memory_graph.get_dot(node_name)
-            if not node_data_t:
+            node_tuple = self.memory_graph.get_dot(node_name)
+            if not node_tuple:
                 continue
-            if now_ts - node_data_t[1].get("last_modified", 0) > node_sum_forget_thresh:
-                removed_sum_txt = self.memory_graph.forget_topic_summary(node_name)
-                if removed_sum_txt:
+            _concept, node_data = node_tuple
+            if (
+                current_timestamp - node_data.get("last_modified", 0)
+                > node_event_forget_threshold_seconds
+            ):
+                removed_event_l1_summary = self.memory_graph.forget_memory_event(
+                    node_name
+                )
+                if removed_event_l1_summary:
                     if node_name in self.memory_graph.G:
-                        node_chg["summary_removed"].append(f"{node_name}")
+                        node_changes["memory_event_removed_from_node"].append(
+                            f"{node_name} (L1: {removed_event_l1_summary[:30]}...)"
+                        )
                     else:
-                        node_chg["node_removed"].append(f"{node_name}")
+                        node_changes["node_itself_removed"].append(
+                            f"{node_name} (因最后事件被遗忘)"
+                        )
                 elif (
                     node_name not in self.memory_graph.G
-                    and node_name not in node_chg["node_removed"]
+                    and node_name not in node_changes["node_itself_removed"]
                 ):
-                    node_chg["node_removed"].append(node_name)
-        if any(edge_chg.values()) or any(node_chg.values()):
-            summary = "; ".join(
-                f"{k}:{len(v)}" for k, v in {**edge_chg, **node_chg}.items() if v
+                    node_changes["node_itself_removed"].append(
+                        f"{node_name} (可能原无事件或数据问题)"
+                    )
+        if any(edge_changes.values()) or any(node_changes.values()):
+            change_summary_parts = []
+            if edge_changes["weakened"]:
+                change_summary_parts.append(f"边削弱:{len(edge_changes['weakened'])}")
+            if edge_changes["removed"]:
+                change_summary_parts.append(f"边移除:{len(edge_changes['removed'])}")
+            if node_changes["memory_event_removed_from_node"]:
+                change_summary_parts.append(
+                    f"节点内事件移除:{len(node_changes['memory_event_removed_from_node'])}"
+                )
+            if node_changes["node_itself_removed"]:
+                change_summary_parts.append(
+                    f"节点移除:{len(node_changes['node_itself_removed'])}"
+                )
+            logger.info(
+                f"遗忘操作检测到变化: {'; '.join(change_summary_parts)}. 即将同步到数据库..."
             )
-            logger.info(f"遗忘检测到变化: {summary}. 同步DB...")
             await self.hippocampus.entorhinal_cortex.sync_memory_to_db()
         else:
-            logger.info("本次遗忘无满足条件项。")
-        logger.info(f"遗忘操作完成，耗时: {time.time()-start_time:.2f}s")
+            logger.info("本次遗忘操作未发现满足条件的边或节点内记忆事件。")
+        logger.info(f"遗忘操作完成，耗时: {time.time() - start_time:.2f}s")
 
     async def operation_consolidate_memory(self):
         start_time = time.time()
-        perc_check, sim_thresh = (
-            self.config.consolidate_memory_percentage,
-            self.config.consolidation_similarity_threshold,
+        consolidation_percentage_to_check = self.config.consolidate_memory_percentage
+        consolidation_similarity_threshold = (
+            self.config.consolidation_similarity_threshold
         )
         logger.info(
-            f"开始整合记忆... 检查比例:{perc_check:.1%}, 合并阈值:{sim_thresh:.2f}"
+            f"开始整合记忆 (层级化)... 检查比例:{consolidation_percentage_to_check:.1%}, "
+            f"合并阈值 (基于L1摘要):{consolidation_similarity_threshold:.2f}"
         )
-        eligible_nodes = []
-        for node, data_attr in self.memory_graph.G.nodes(data=True):
-            node_t = self.memory_graph.get_dot(node)
-            if not node_t:
+        eligible_nodes_for_consolidation = []
+        for node_name in list(self.memory_graph.G.nodes()):
+            node_tuple = self.memory_graph.get_dot(node_name)
+            if not node_tuple:
                 continue
-            items_with_embed_count = sum(
-                1
-                for item in node_t[1].get("memory_items", [])
-                if isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[1], list)
-            )
-            if items_with_embed_count >= 2:
-                eligible_nodes.append(node)
-        if not eligible_nodes:
-            logger.info("无包含>=2个带嵌入记忆项的节点，无需整合。")
+            _concept, node_data = node_tuple
+            memory_events = node_data.get("memory_events", [])
+            valid_events_for_comparison_count = 0
+            for event in memory_events:
+                hs = event.get("hierarchical_summaries", {})
+                l1_data = hs.get("L1_core_sentence")
+                if (
+                    l1_data
+                    and isinstance(l1_data, tuple)
+                    and len(l1_data) == 2
+                    and l1_data[0]
+                    and l1_data[1]
+                ):
+                    valid_events_for_comparison_count += 1
+            if valid_events_for_comparison_count >= 2:
+                eligible_nodes_for_consolidation.append(node_name)
+        if not eligible_nodes_for_consolidation:
+            logger.info("无包含至少2个带有效L1摘要和嵌入的记忆事件的节点，无需整合。")
             return
-        num_to_check = max(1, int(len(eligible_nodes) * perc_check))
+        num_nodes_to_actually_check = max(
+            1,
+            int(
+                len(eligible_nodes_for_consolidation)
+                * consolidation_percentage_to_check
+            ),
+        )
         nodes_to_check_sample = (
-            random.sample(eligible_nodes, num_to_check)
-            if len(eligible_nodes) > num_to_check
-            else eligible_nodes
+            random.sample(eligible_nodes_for_consolidation, num_nodes_to_actually_check)
+            if len(eligible_nodes_for_consolidation) > num_nodes_to_actually_check
+            else eligible_nodes_for_consolidation
         )
         logger.info(
-            f"将检查 {len(nodes_to_check_sample)}/{len(eligible_nodes)} 个节点进行整合。"
+            f"将检查 {len(nodes_to_check_sample)}/{len(eligible_nodes_for_consolidation)} 个合格节点进行记忆事件整合。"
         )
-        merged_count, modified_nodes = 0, set()
-        now_ts = datetime.now().timestamp()
+        total_merged_event_pairs_count = 0
+        modified_node_names_set = set()
+        current_timestamp = datetime.now().timestamp()
         for node_name in nodes_to_check_sample:
-            node_t = self.memory_graph.get_dot(node_name)
-            if not node_t:
+            node_tuple = self.memory_graph.get_dot(node_name)
+            if not node_tuple:
                 continue
-            current_mem_items = list(node_t[1].get("memory_items", []))
-            items_with_embed_indexed = [
-                (i, item)
-                for i, item in enumerate(current_mem_items)
-                if isinstance(item, tuple)
-                and len(item) == 2
-                and isinstance(item[1], list)
-            ]
-            if len(items_with_embed_indexed) < 2:
+            _concept, node_data = node_tuple
+            memory_events_in_node = list(node_data.get("memory_events", []))
+            events_with_valid_l1_for_comparison = []
+            for event_idx, event_data in enumerate(memory_events_in_node):
+                hs = event_data.get("hierarchical_summaries", {})
+                l1_summary_tuple = hs.get("L1_core_sentence")
+                if (
+                    l1_summary_tuple
+                    and isinstance(l1_summary_tuple, tuple)
+                    and len(l1_summary_tuple) == 2
+                    and l1_summary_tuple[0]
+                    and l1_summary_tuple[1]
+                ):
+                    events_with_valid_l1_for_comparison.append(
+                        (
+                            event_idx,
+                            l1_summary_tuple[0],
+                            l1_summary_tuple[1],
+                            event_data,
+                        )
+                    )
+            if len(events_with_valid_l1_for_comparison) < 2:
                 continue
-            items_with_embed_indexed.sort(
-                key=lambda x: calculate_information_content(x[1][0]), reverse=True
+            events_with_valid_l1_for_comparison.sort(
+                key=lambda x: calculate_information_content(x[1]), reverse=True
             )
-            final_items_for_node = [
-                item
-                for item in current_mem_items
-                if not (
-                    isinstance(item, tuple)
-                    and len(item) == 2
-                    and isinstance(item[1], list)
-                )
-            ]
+            final_events_for_this_node = []
             processed_original_indices = set()
-            for i in range(len(items_with_embed_indexed)):
-                original_idx_i, (summary_i, embedding_i) = items_with_embed_indexed[i]
+            for i in range(len(events_with_valid_l1_for_comparison)):
+                original_idx_i, summary_i_text, embedding_i, event_data_i = (
+                    events_with_valid_l1_for_comparison[i]
+                )
                 if original_idx_i in processed_original_indices:
                     continue
-                current_group_representative = (summary_i, embedding_i)
-                for j in range(i + 1, len(items_with_embed_indexed)):
-                    original_idx_j, (summary_j, embedding_j) = items_with_embed_indexed[
-                        j
-                    ]
+                current_group_representative_event = event_data_i
+                for j in range(i + 1, len(events_with_valid_l1_for_comparison)):
+                    original_idx_j, summary_j_text, embedding_j, event_data_j = (
+                        events_with_valid_l1_for_comparison[j]
+                    )
                     if original_idx_j in processed_original_indices:
                         continue
-                    if cosine_similarity(embedding_i, embedding_j) >= sim_thresh:
+                    if (
+                        cosine_similarity(embedding_i, embedding_j)
+                        >= consolidation_similarity_threshold
+                    ):
                         logger.info(
-                            f"整合节点'{node_name}': '{summary_j[:30]}...' 与 '{summary_i[:30]}...'相似. 保留信息量较高者."
+                            f"整合节点'{node_name}': 事件 (L1: '{summary_j_text[:30]}...') 与 事件 (L1: '{summary_i_text[:30]}...') 相似. "
+                            f"保留信息熵较高者 (即 '{summary_i_text[:30]}...')."
                         )
                         processed_original_indices.add(original_idx_j)
-                        merged_count += 1
-                        modified_nodes.add(node_name)
-                final_items_for_node.append(current_group_representative)
+                        total_merged_event_pairs_count += 1
+                        modified_node_names_set.add(node_name)
+                final_events_for_this_node.append(current_group_representative_event)
                 processed_original_indices.add(original_idx_i)
-            if len(final_items_for_node) < len(current_mem_items):
+            if len(final_events_for_this_node) < len(memory_events_in_node):
+                original_event_ids_kept = {
+                    ev.get("event_id") for ev in final_events_for_this_node
+                }
+                truly_final_events = list(final_events_for_this_node)
+                for original_event in memory_events_in_node:
+                    is_comparable_and_processed = False
+                    for idx, _, _, _ in events_with_valid_l1_for_comparison:
+                        if memory_events_in_node[idx].get(
+                            "event_id"
+                        ) == original_event.get("event_id"):
+                            if idx in processed_original_indices:
+                                is_comparable_and_processed = True
+                            break
+                    if (
+                        not is_comparable_and_processed
+                        and original_event.get("event_id")
+                        not in original_event_ids_kept
+                    ):
+                        hs_original = original_event.get("hierarchical_summaries", {})
+                        l1_data_original = hs_original.get("L1_core_sentence")
+                        if not (
+                            l1_data_original
+                            and isinstance(l1_data_original, tuple)
+                            and len(l1_data_original) == 2
+                            and l1_data_original[0]
+                            and l1_data_original[1]
+                        ):
+                            truly_final_events.append(original_event)
                 self.memory_graph.G.nodes[node_name][
-                    "memory_items"
-                ] = final_items_for_node
-                self.memory_graph.G.nodes[node_name]["last_modified"] = now_ts
-        if merged_count > 0:
+                    "memory_events"
+                ] = truly_final_events
+                self.memory_graph.G.nodes[node_name][
+                    "last_modified"
+                ] = current_timestamp
+            elif modified_node_names_set:
+                self.memory_graph.G.nodes[node_name][
+                    "last_modified"
+                ] = current_timestamp
+        if total_merged_event_pairs_count > 0:
             logger.info(
-                f"共合并{merged_count}对相似记忆项，分布在{len(modified_nodes)}个节点。同步DB..."
+                f"记忆整合共合并移除了 {total_merged_event_pairs_count} 个相似的记忆事件，"
+                f"分布在 {len(modified_node_names_set)} 个概念节点中。即将同步到数据库..."
             )
             await self.hippocampus.entorhinal_cortex.sync_memory_to_db()
         else:
-            logger.info("本次整合未发现需合并项。")
-        logger.info(f"整合记忆完成，耗时: {time.time()-start_time:.2f}s")
+            logger.info("本次记忆整合未发现需要合并的记忆事件。")
+        logger.info(f"整合记忆 (层级化) 完成，耗时: {time.time() - start_time:.2f}s")
 
 
 class Hippocampus:
@@ -1012,7 +1330,9 @@ class Hippocampus:
         self.entorhinal_cortex: Optional[EntorhinalCortex] = None
         self.parahippocampal_gyrus: Optional[ParahippocampalGyrus] = None
         self._nodes_needing_embedding_update: List[str] = []
-        self._items_needing_summary_embedding_update: Dict[str, List[int]] = {}
+        self._items_needing_summary_embedding_update: Dict[
+            str, List[Tuple[str, str]]
+        ] = {}
         self._db_graph_lock = asyncio.Lock()
 
     def initialize(
@@ -1046,10 +1366,10 @@ class Hippocampus:
                     self.config.llm_summary_by_topic,
                     self.db_instance,
                     global_llm_params,
-                    "memory_summary_topic",
+                    "memory_hier_summary",
                 )
             except Exception as e:
-                logger.error(f"初始化主题摘要LLM失败: {e}", exc_info=True)
+                logger.error(f"初始化层级摘要LLM失败: {e}", exc_info=True)
         if self.config.llm_embedding_topic and LLM_request:
             try:
                 self.llm_embedding_topic = LLM_request(
@@ -1110,7 +1430,7 @@ class Hippocampus:
         if nodes_to_proc:
             logger.info(f"开始处理{len(nodes_to_proc)}个节点概念嵌入...")
             upd_c, fail_c = 0, 0
-            bulk_db_upd = []
+            bulk_db_upd_concept = []
             for i, concept in enumerate(nodes_to_proc):
                 if concept not in self.memory_graph.G:
                     continue
@@ -1122,7 +1442,7 @@ class Hippocampus:
                     self.memory_graph.G.nodes[concept][
                         "last_modified"
                     ] = datetime.now().timestamp()
-                    bulk_db_upd.append(
+                    bulk_db_upd_concept.append(
                         UpdateOne(
                             {"concept": concept},
                             {
@@ -1140,57 +1460,87 @@ class Hippocampus:
                     fail_c += 1
                 if (
                     (i + 1) % batch_size == 0
-                    and bulk_db_upd
+                    and bulk_db_upd_concept
                     and self.db_instance is not None
                 ):
                     try:
                         self.db_instance.graph_data_nodes.bulk_write(
-                            bulk_db_upd, ordered=False
+                            bulk_db_upd_concept, ordered=False
                         )
-                        bulk_db_upd = []
+                        bulk_db_upd_concept = []
                     except Exception as e:
                         logger.error(f"批量更新概念嵌入DB出错:{e}")
                 await asyncio.sleep(delay)
-            if bulk_db_upd and self.db_instance is not None:
+            if bulk_db_upd_concept and self.db_instance is not None:
                 try:
                     self.db_instance.graph_data_nodes.bulk_write(
-                        bulk_db_upd, ordered=False
+                        bulk_db_upd_concept, ordered=False
                     )
                 except Exception as e:
                     logger.error(f"最后批量更新概念嵌入DB出错:{e}")
             logger.info(f"概念嵌入更新完成。成功:{upd_c},失败:{fail_c}。")
-        items_to_proc = dict(self._items_needing_summary_embedding_update)
+        items_to_proc_hierarchical = dict(self._items_needing_summary_embedding_update)
         self._items_needing_summary_embedding_update.clear()
-        if items_to_proc:
-            total_sum_upd = sum(len(v) for v in items_to_proc.values())
+        if items_to_proc_hierarchical:
+            total_sum_levels_to_update = sum(
+                len(v) for v in items_to_proc_hierarchical.values()
+            )
             logger.info(
-                f"开始处理{len(items_to_proc)}节点中缺失的{total_sum_upd}个摘要嵌入..."
+                f"开始处理概念中缺失的 {total_sum_levels_to_update} 个层级摘要嵌入..."
             )
             upd_s, fail_s = 0, 0
-            for concept, indices in items_to_proc.items():
-                if not indices or concept not in self.memory_graph.G:
+            for concept, event_level_pairs in items_to_proc_hierarchical.items():
+                if not event_level_pairs or concept not in self.memory_graph.G:
                     continue
-                node_t = self.memory_graph.get_dot(concept)
-                if not node_t:
+                node_tuple = self.memory_graph.get_dot(concept)
+                if not node_tuple:
                     continue
-                curr_items = list(node_t[1].get("memory_items", []))
-                node_mod = False
-                for idx in indices:
-                    if 0 <= idx < len(curr_items):
-                        txt, emb = curr_items[idx]
-                        if emb is None:
-                            sum_emb_vec = await self.get_embedding_async(
-                                txt, request_type="memory_summary_embed_补"
+                _, node_data = node_tuple
+                current_memory_events = list(node_data.get("memory_events", []))
+                if not current_memory_events:
+                    continue
+                node_modified_in_db = False
+                event_id_to_idx_map = {
+                    event.get("event_id"): i
+                    for i, event in enumerate(current_memory_events)
+                }
+                for event_id, level_name in event_level_pairs:
+                    event_idx = event_id_to_idx_map.get(event_id)
+                    if event_idx is None or not (
+                        0 <= event_idx < len(current_memory_events)
+                    ):
+                        logger.warning(
+                            f"补摘要嵌入时，概念'{concept}'中未找到事件ID'{event_id}'。"
+                        )
+                        continue
+                    target_event = current_memory_events[event_idx]
+                    hier_summaries = target_event.get("hierarchical_summaries", {})
+                    summary_tuple = hier_summaries.get(level_name)
+                    if (
+                        summary_tuple
+                        and isinstance(summary_tuple, tuple)
+                        and len(summary_tuple) == 2
+                    ):
+                        text_to_embed, current_embedding = summary_tuple
+                        if current_embedding is None and text_to_embed:
+                            summary_emb_vec = await self.get_embedding_async(
+                                text_to_embed,
+                                request_type=f"memory_sum_embed_补_{level_name}",
                             )
-                            if sum_emb_vec:
-                                curr_items[idx] = (txt, sum_emb_vec)
+                            if summary_emb_vec:
+                                hier_summaries[level_name] = (
+                                    text_to_embed,
+                                    summary_emb_vec,
+                                )
                                 upd_s += 1
-                                node_mod = True
+                                node_modified_in_db = True
                             else:
                                 fail_s += 1
                             await asyncio.sleep(delay)
-                if node_mod and self.db_instance is not None:
-                    self.memory_graph.G.nodes[concept]["memory_items"] = curr_items
+                if node_modified_in_db and self.db_instance is not None:
+                    self.memory_graph.G.nodes[concept][
+                        "memory_events"
+                    ] = current_memory_events
                     self.memory_graph.G.nodes[concept][
                         "last_modified"
                     ] = datetime.now().timestamp()
@@ -1199,7 +1549,7 @@ class Hippocampus:
                             {"concept": concept},
                             {
                                 "$set": {
-                                    "memory_items": curr_items,
+                                    "memory_events": current_memory_events,
                                     "last_modified": self.memory_graph.G.nodes[concept][
                                         "last_modified"
                                     ],
@@ -1207,8 +1557,8 @@ class Hippocampus:
                             },
                         )
                     except Exception as e:
-                        logger.error(f"更新节点'{concept}'摘要嵌入DB出错:{e}")
-            logger.info(f"摘要嵌入更新完成。成功:{upd_s},失败:{fail_s}。")
+                        logger.error(f"更新节点'{concept}'层级摘要嵌入到DB出错:{e}")
+            logger.info(f"层级摘要嵌入更新完成。成功:{upd_s},失败:{fail_s}。")
         logger.info("后台嵌入更新任务结束。")
 
     def _clear_pending_embeddings(self):
@@ -1244,40 +1594,124 @@ class Hippocampus:
     def get_all_node_names(self) -> List[str]:
         return list(self.memory_graph.G.nodes())
 
-    def calculate_node_hash(self, c: str, s: List[str]) -> int:
-        return hash(f"c:{c}|s:{'|'.join(sorted(list(set(s))))}")
+    def calculate_node_hash(
+        self, concept_name: str, memory_events_list: List[Dict]
+    ) -> int:
+        hash_parts = [f"c:{concept_name}"]
+        sorted_memory_events = sorted(
+            memory_events_list, key=lambda ev: ev.get("event_id", "")
+        )
+        for event in sorted_memory_events:
+            event_id = event.get("event_id", "unknown_event_id")
+            hs = event.get("hierarchical_summaries", {})
+            event_summary_parts = [f"ev_id:{event_id}"]
+            sorted_levels = sorted(hs.keys())
+            for level_name in sorted_levels:
+                summary_tuple = hs.get(level_name)
+                if (
+                    summary_tuple
+                    and isinstance(summary_tuple, tuple)
+                    and len(summary_tuple) > 0
+                ):
+                    summary_text = summary_tuple[0]
+                    event_summary_parts.append(f"{level_name}_txt:{summary_text}")
+            hash_parts.append("|".join(event_summary_parts))
+        full_hash_string = "||".join(hash_parts)
+        return hash(full_hash_string)
 
     def calculate_edge_hash(self, s: str, t: str) -> int:
         return hash(f"e:{'-'.join(sorted([s,t]))}")
 
-    def _create_topic_specific_summary_prompt(self, t: str, ti: str, to: str) -> str:
-        return self.prompt_builder.build_topic_specific_summary_prompt(
-            text_to_summarize=t, time_info=ti, topic=to
+    def _create_hierarchical_summary_prompt(
+        self, text_to_summarize: str, time_info: str, topic: str
+    ) -> str:
+        return self.prompt_builder.build_hierarchical_summary_prompt(
+            text_to_summarize=text_to_summarize, time_info=time_info, topic=topic
         )
 
-    async def generate_topic_specific_summary(
-        self, txt: str, time_inf: str, topic: str
-    ) -> Optional[str]:
+    async def generate_hierarchical_summaries(
+        self, text_to_summarize: str, time_info: str, topic: str
+    ) -> Optional[Dict[str, str]]:
         if not self.llm_summary_by_topic:
-            logger.warning("摘要LLM未初始化。")
+            logger.warning("层级摘要LLM未初始化。")
             return None
-        if not txt or not txt.strip() or not topic:
+        if not text_to_summarize or not text_to_summarize.strip() or not topic:
             return None
-        prompt = self._create_topic_specific_summary_prompt(txt, time_inf, topic)
+        prompt = self._create_hierarchical_summary_prompt(
+            text_to_summarize, time_info, topic
+        )
         try:
             resp: Optional[GeminiSDKResponse] = (
                 await self.llm_summary_by_topic.generate_response_async(
-                    prompt, request_type="memory_gen_summary"
+                    prompt, request_type="memory_gen_hier_summary"
                 )
             )
             if resp and resp.content and resp.content.strip():
-                return resp.content.strip()
-            logger.warning(
-                f"LLM为主题'{topic}'返回摘要为空或无效。响应:{resp.to_dict() if resp else 'None'}"
-            )
-            return None
+                try:
+                    cleaned_content = resp.content.strip()
+                    if cleaned_content.startswith("```json"):
+                        cleaned_content = cleaned_content[7:]
+                    if cleaned_content.startswith("```"):
+                        cleaned_content = cleaned_content[3:]
+                    if cleaned_content.endswith("```"):
+                        cleaned_content = cleaned_content[:-3]
+                    hier_summaries = json.loads(cleaned_content.strip())
+                    if isinstance(hier_summaries, dict):
+                        valid_structure = True
+                        for k, v in hier_summaries.items():
+                            if not isinstance(k, str):
+                                valid_structure = False
+                                break
+                            if k == "L3_details_list":
+                                if not (
+                                    isinstance(v, str)
+                                    or (
+                                        isinstance(v, list)
+                                        and all(isinstance(item, str) for item in v)
+                                    )
+                                ):
+                                    valid_structure = False
+                                    break
+                            elif not isinstance(v, str):
+                                valid_structure = False
+                                break
+                        if valid_structure:
+                            expected_keys = {
+                                "L0_keywords",
+                                "L1_core_sentence",
+                                "L2_paragraph",
+                                "L3_details_list",
+                            }
+                            if expected_keys.issubset(hier_summaries.keys()):
+                                if isinstance(
+                                    hier_summaries.get("L3_details_list"), list
+                                ):
+                                    hier_summaries["L3_details_list"] = "\n".join(
+                                        hier_summaries["L3_details_list"]
+                                    )
+                                return hier_summaries
+                            else:
+                                logger.warning(
+                                    f"LLM为主题'{topic}'返回的层级摘要JSON缺少预期键。得到: {hier_summaries.keys()}"
+                                )
+                                return None
+                        else:
+                            logger.warning(
+                                f"LLM为主题'{topic}'返回的层级摘要JSON中键或值类型不正确。内容: {cleaned_content}"
+                            )
+                            return None
+                    else:
+                        logger.warning(
+                            f"LLM为主题'{topic}'返回的层级摘要解析后非字典类型。内容: {cleaned_content}"
+                        )
+                        return None
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        f"LLM为主题'{topic}'返回的层级摘要JSON解析失败: {e}。内容: {resp.content.strip()}"
+                    )
+                    return None
         except Exception as e:
-            logger.error(f"为主题'{topic}'生成摘要出错:{e}", exc_info=True)
+            logger.error(f"为主题'{topic}'生成层级摘要出错:{e}", exc_info=True)
             return None
 
     def _create_find_topic_prompt(self, txt: str, num: int) -> str:
@@ -1302,10 +1736,13 @@ class Hippocampus:
                 logger.warning("LLM提取主题返回空。")
                 return []
             extracted = re.findall(r"<([^>]+)>", resp.content)
-            if not extracted or (
-                len(extracted) == 1 and extracted[0].strip().lower() == "none"
-            ):
-                logger.info(f"LLM未提取到有效主题或返回<none>: '{resp.content}'")
+            if not extracted:
+                logger.info(f"LLM未提取到任何内容（空列表）。响应: '{resp.content}'")
+                return []
+            if len(extracted) == 1 and extracted[0].strip().lower() == "none":
+                logger.info(
+                    f"LLM提取到<none>，判定为无有效主题。响应: '{resp.content}'"
+                )
                 return []
             topics = set(
                 t.strip()
@@ -1331,7 +1768,7 @@ class Hippocampus:
         return num
 
     async def get_memory_from_keyword(
-        self, kw: str, depth: int = 2
+        self, kw: str, depth: int = 2, summary_level: str = "L1_core_sentence"
     ) -> List[Tuple[str, List[str], float]]:
         if not kw or not kw.strip() or not self.llm_embedding_topic:
             return []
@@ -1342,24 +1779,36 @@ class Hippocampus:
             logger.warning(f"无法获取关键词'{kw}'嵌入。")
             return []
         similar_nodes: List[Tuple[str, List[str], float]] = []
-        for node, attr in self.memory_graph.G.nodes(data=True):
+        for node_name, attr in self.memory_graph.G.nodes(data=True):
             node_emb = attr.get("embedding")
             if node_emb and isinstance(node_emb, list):
                 try:
-                    sim = cosine_similarity(kw_emb, node_emb)
-                    if sim >= self.config.keyword_retrieval_node_similarity_threshold:
-                        node_t = self.memory_graph.get_dot(node)
-                        if node_t:
-                            summaries = [
-                                item[0]
-                                for item in node_t[1].get("memory_items", [])
-                                if item and item[0]
-                            ]
-                            if summaries:
-                                similar_nodes.append((node, summaries, sim))
+                    sim_to_concept = cosine_similarity(kw_emb, node_emb)
+                    if (
+                        sim_to_concept
+                        >= self.config.keyword_retrieval_node_similarity_threshold
+                    ):
+                        node_tuple = self.memory_graph.get_dot(node_name)
+                        if node_tuple:
+                            _, node_data = node_tuple
+                            summaries_from_events = []
+                            for event in node_data.get("memory_events", []):
+                                hs = event.get("hierarchical_summaries", {})
+                                summary_data = hs.get(summary_level)
+                                if (
+                                    summary_data
+                                    and isinstance(summary_data, tuple)
+                                    and len(summary_data) > 0
+                                    and isinstance(summary_data, str)
+                                ):
+                                    summaries_from_events.append(summary_data)
+                            if summaries_from_events:
+                                similar_nodes.append(
+                                    (node_name, summaries_from_events, sim_to_concept)
+                                )
                 except Exception as e:
-                    logger.error(f"计算关键词'{kw}'与节点'{node}'相似度出错:{e}")
-        similar_nodes.sort(key=lambda x: x[2], reverse=True)
+                    logger.error(f"计算关键词'{kw}'与节点'{node_name}'相似度出错:{e}")
+        similar_nodes.sort(key=lambda x: x, reverse=True)
         return similar_nodes
 
     def _create_bulk_relevance_check_prompt(
@@ -1377,6 +1826,8 @@ class Hippocampus:
         num: Optional[int] = None,
         depth: Optional[int] = None,
         fast_kw: bool = False,
+        retrieval_summary_level: str = "L1_core_sentence",
+        output_summary_level: str = "L2_paragraph",
     ) -> List[Tuple[str, str]]:
         if not txt or not txt.strip():
             return []
@@ -1448,7 +1899,7 @@ class Hippocampus:
         if not act_map:
             logger.info("激活扩散未能激活任何节点。")
             return []
-        sorted_act_nodes = sorted(act_map.items(), key=lambda x: x[1], reverse=True)
+        sorted_act_nodes = sorted(act_map.items(), key=lambda x: x, reverse=True)
         if not self.llm_embedding_topic:
             logger.warning("嵌入模型不可用，无法相似度排序。")
             return []
@@ -1458,34 +1909,86 @@ class Hippocampus:
         if not txt_emb:
             logger.warning("无法获取输入文本嵌入。")
             return []
-        candidates_rerank: List[Tuple[str, str, float]] = []
+        candidates_for_rerank: List[Tuple[str, str, float, str, str]] = []
         top_n_scan = self.config.retrieval_top_activated_nodes_to_scan
         min_sum_sim = self.config.retrieval_min_summary_similarity
-        for node, act_score in sorted_act_nodes[:top_n_scan]:
-            node_t = self.memory_graph.get_dot(node)
-            if not node_t:
+        for node_name, _act_score in sorted_act_nodes[:top_n_scan]:
+            node_tuple = self.memory_graph.get_dot(node_name)
+            if not node_tuple:
                 continue
-            for s_txt, s_emb in node_t[1].get("memory_items", []):
-                if s_emb and isinstance(s_emb, list):
+            _concept, node_data = node_tuple
+            for event in node_data.get("memory_events", []):
+                hs = event.get("hierarchical_summaries", {})
+                event_id = event.get("event_id", "unknown_event")
+                retrieval_summary_data = hs.get(retrieval_summary_level)
+                output_summary_data = hs.get(output_summary_level)
+                if (
+                    not retrieval_summary_data
+                    or not isinstance(retrieval_summary_data, tuple)
+                    or len(retrieval_summary_data) < 2
+                ):
+                    continue
+                retrieval_s_text, retrieval_s_emb = retrieval_summary_data
+                output_s_text_str = ""
+                if (
+                    output_summary_data
+                    and isinstance(output_summary_data, tuple)
+                    and len(output_summary_data) > 0
+                    and isinstance(output_summary_data[0], str)
+                ):
+                    output_s_text_str = output_summary_data[0]
+                elif (
+                    retrieval_summary_data
+                    and isinstance(retrieval_summary_data, tuple)
+                    and len(retrieval_summary_data) > 0
+                    and isinstance(retrieval_summary_data[0], str)
+                ):
+                    output_s_text_str = retrieval_summary_data[0]
+                else:
+                    logger.warning(
+                        f"在节点 {node_name} 事件 {event_id} 中，无法获取有效的 output 或 retrieval 摘要文本。"
+                    )
+                    continue
+                if retrieval_s_emb and isinstance(retrieval_s_emb, list):
                     try:
-                        sim = cosine_similarity(txt_emb, s_emb)
+                        sim = cosine_similarity(txt_emb, retrieval_s_emb)
                         if sim >= min_sum_sim:
-                            candidates_rerank.append((node, s_txt, sim))
+                            candidates_for_rerank.append(
+                                (
+                                    node_name,
+                                    event_id,
+                                    retrieval_s_text,
+                                    sim,
+                                    output_s_text_str,
+                                )
+                            )
                     except Exception:
                         pass
-        if not candidates_rerank:
-            logger.info("无摘要通过相似度阈值。")
+        if not candidates_for_rerank:
+            logger.info(f"无摘要 (层级 {retrieval_summary_level}) 通过相似度阈值。")
             return []
-        candidates_rerank.sort(key=lambda x: x[2], reverse=True)
-        to_llm_rerank = candidates_rerank[
-            : self.config.retrieval_max_candidates_for_llm_rerank
+        candidates_for_rerank.sort(key=lambda x: x, reverse=True)
+        to_llm_rerank_input = [
+            (topic, event_id, retrieval_text, score)
+            for topic, event_id, retrieval_text, score, _output_text in candidates_for_rerank[
+                : self.config.retrieval_max_candidates_for_llm_rerank
+            ]
         ]
-        final_mems: List[Tuple[str, str]] = []
-        if self.llm_re_rank and to_llm_rerank:
+        candidates_map_for_output = {
+            (cand_topic, cand_event_id): output_text
+            for cand_topic, cand_event_id, _r_text, _score, output_text in candidates_for_rerank[
+                : self.config.retrieval_max_candidates_for_llm_rerank
+            ]
+        }
+        final_mem_tuples: List[Tuple[str, str]] = []
+        if self.llm_re_rank and to_llm_rerank_input:
             logger.info(
-                f"LLM({self.llm_re_rank.model_name})重排{len(to_llm_rerank)}条候选记忆..."
+                f"LLM({self.llm_re_rank.model_name})重排{len(to_llm_rerank_input)}条候选记忆 (基于 {retrieval_summary_level} 摘要)..."
             )
-            prompt = self._create_bulk_relevance_check_prompt(txt, to_llm_rerank)
+            prompt_candidates = [
+                (topic, text, score) for topic, _eid, text, score in to_llm_rerank_input
+            ]
+            prompt = self._create_bulk_relevance_check_prompt(txt, prompt_candidates)
             try:
                 resp = await self.llm_re_rank.generate_response_async(
                     prompt, request_type="memory_rerank"
@@ -1500,37 +2003,108 @@ class Hippocampus:
                             for i in re.sub(r"[^\d,]", "", llm_order_str).split(",")
                             if i.strip().isdigit()
                         ]
-                        temp_llm_sorted = [
-                            to_llm_rerank[idx]
-                            for idx in indices
-                            if 0 <= idx < len(to_llm_rerank)
-                        ]
-                        final_mems = [(t, s) for t, s, _ in temp_llm_sorted]
-                        logger.info(f"LLM成功重排{len(final_mems)}条记忆。")
+                        for idx in indices:
+                            if 0 <= idx < len(to_llm_rerank_input):
+                                (
+                                    selected_topic,
+                                    selected_event_id,
+                                    _selected_retrieval_text,
+                                    _selected_score,
+                                ) = to_llm_rerank_input[idx]
+                                output_text_for_final = candidates_map_for_output.get(
+                                    (selected_topic, selected_event_id)
+                                )
+                                if output_text_for_final:
+                                    final_mem_tuples.append(
+                                        (selected_topic, output_text_for_final)
+                                    )
+                                else:
+                                    final_mem_tuples.append(
+                                        (selected_topic, _selected_retrieval_text)
+                                    )
+                        logger.info(
+                            f"LLM成功重排并选择了{len(final_mem_tuples)}条记忆。"
+                        )
                     except Exception as e:
-                        logger.error(f"解析LLM重排索引失败:{e}.回退.")
-                        final_mems = [(t, s) for t, s, _ in to_llm_rerank]
+                        logger.error(f"解析LLM重排索引失败:{e}. 回退到原始相似度排序。")
+                        final_mem_tuples = [
+                            (
+                                topic,
+                                candidates_map_for_output.get(
+                                    (topic, event_id), r_text
+                                ),
+                            )
+                            for topic, event_id, r_text, _score, _o_text in candidates_for_rerank[
+                                : self.config.retrieval_max_candidates_for_llm_rerank
+                            ]
+                        ]
                 else:
-                    logger.warning("LLM重排响应为空,回退.")
-                    final_mems = [(t, s) for t, s, _ in to_llm_rerank]
+                    logger.warning("LLM重排响应为空, 回退到原始相似度排序。")
+                    final_mem_tuples = []
+                    for (
+                        topic,
+                        event_id,
+                        r_text,
+                        _score,
+                        o_text_str,
+                    ) in candidates_for_rerank[
+                        : self.config.retrieval_max_candidates_for_llm_rerank
+                    ]:
+                        final_mem_tuples.append(
+                            (
+                                topic,
+                                candidates_map_for_output.get(
+                                    (topic, event_id),
+                                    o_text_str if o_text_str else r_text,
+                                ),
+                            )
+                        )
             except Exception as e:
                 logger.error(f"LLM重排调用失败:{e}", exc_info=True)
-                final_mems = [(t, s) for t, s, _ in to_llm_rerank]
+                final_mem_tuples = []
+                for (
+                    topic,
+                    event_id,
+                    r_text,
+                    _score,
+                    o_text_str,
+                ) in candidates_for_rerank[
+                    : self.config.retrieval_max_candidates_for_llm_rerank
+                ]:
+                    final_mem_tuples.append(
+                        (
+                            topic,
+                            candidates_map_for_output.get(
+                                (topic, event_id), o_text_str if o_text_str else r_text
+                            ),
+                        )
+                    )
         else:
             if not self.llm_re_rank:
                 logger.debug("重排LLM未配置，使用初步筛选结果。")
-            final_mems = [(t, s) for t, s, _ in to_llm_rerank]
-        seen_sum, unique_final = set(), []
-        for t, s_txt in final_mems:
-            if s_txt not in seen_sum:
-                seen_sum.add(s_txt)
-                unique_final.append((t, s_txt))
-            if len(unique_final) >= max_mem:
+            final_mem_tuples = []
+            for topic, event_id, r_text, _score, o_text_str in candidates_for_rerank[
+                : self.config.retrieval_max_candidates_for_llm_rerank
+            ]:
+                final_mem_tuples.append(
+                    (
+                        topic,
+                        candidates_map_for_output.get(
+                            (topic, event_id), o_text_str if o_text_str else r_text
+                        ),
+                    )
+                )
+        seen_summaries, unique_final_mems = set(), []
+        for topic_name, summary_text in final_mem_tuples:
+            if summary_text not in seen_summaries:
+                seen_summaries.add(summary_text)
+                unique_final_mems.append((topic_name, summary_text))
+            if len(unique_final_mems) >= max_mem:
                 break
         logger.info(
-            f"记忆检索完成,找到{len(unique_final)}条。耗时:{time.time()-start_t:.3f}s"
+            f"记忆检索完成 (基于 {retrieval_summary_level}, 输出 {output_summary_level}), 找到{len(unique_final_mems)}条。耗时:{time.time()-start_t:.3f}s"
         )
-        return unique_final
+        return unique_final_mems
 
     async def get_activation_score_from_text(
         self, txt: str, depth: int = 3, fast_kw: bool = False

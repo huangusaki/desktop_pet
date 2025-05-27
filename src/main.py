@@ -651,6 +651,22 @@ async def run_memory_build():
         logger.info("定时任务：跳过构建记忆，记忆系统未初始化或未导入。")
 
 
+async def initial_memory_build():
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
+        logger.info("Main (Initial Build): 开始首次记忆构建...")
+        try:
+            await hippocampus_manager_global.build_memory()
+            logger.info("Main (Initial Build): 首次记忆构建完成。")
+        except Exception as e:
+            logger.error(
+                f"Main (Initial Build): 首次记忆构建时发生错误: {e}", exc_info=True
+            )
+    else:
+        logger.info(
+            "Main (Initial Build): 跳过首次记忆构建，记忆系统未初始化或未导入。"
+        )
+
+
 async def run_memory_forget():
     if hippocampus_manager_global and hippocampus_manager_global._initialized:
         logger.info("定时任务：开始遗忘记忆...")
@@ -822,6 +838,16 @@ if __name__ == "__main__":
         QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
         AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
+    if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+        logger.info("Main: 准备执行首次记忆构建...")
+        initial_build_future = AsyncioHelper.schedule_task(initial_memory_build())
+        if initial_build_future:
+            logger.info("Main: 首次记忆构建任务已调度到后台执行。")
+            pass
+        else:
+            logger.error("Main: 无法调度首次记忆构建任务。")
+    else:
+        logger.error("Main: Asyncio loop 不可用，无法执行首次记忆构建。")
     if not config_manager_global or not assets_path_global:
         QMessageBox.critical(
             None, "配置错误", "ConfigManager 或资源路径未初始化。程序将退出。"

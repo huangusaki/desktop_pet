@@ -135,7 +135,9 @@ class GeminiClient:
             response_object = self.client.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
-            logger.info(f"GeminiClient: Raw LLM Response (send_message): {str(response_object)}")
+            logger.info(
+                f"GeminiClient: Raw LLM Response (send_message): {str(response_object)}"
+            )
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:
@@ -218,8 +220,8 @@ class GeminiClient:
                     pet_name=self.pet_name,
                     user_name=self.user_name,
                     available_emotions=self.available_emotions,
-                    mongo_handler=self.mongo_handler, 
-                    unified_default_emotion=self.unified_default_emotion
+                    mongo_handler=self.mongo_handler,
+                    unified_default_emotion=self.unified_default_emotion,
                 )
             )
             user_parts_for_vision = [types.Part(text=screen_analysis_text_prompt)]
@@ -263,7 +265,9 @@ class GeminiClient:
                 contents=contents_for_vision,
                 config=api_vision_config,
             )
-            logger.info(f"GeminiClient: Raw LLM Response (send_message_with_image): {str(response_object)}")
+            logger.info(
+                f"GeminiClient: Raw LLM Response (send_message_with_image): {str(response_object)}"
+            )
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
                 if validated_data.thinking_process:

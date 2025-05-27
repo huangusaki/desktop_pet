@@ -24,19 +24,23 @@ class ConfigManager:
     def get_screen_analysis_prompt(self):
         return "分析这张关于{user_name}屏幕的图片，作为{pet_name}，你的情绪可以是{available_emotions_str}，回复必须是JSON。"
 
+    def get_hierarchical_summary_level_description(self, level_name: str) -> str:
+        descriptions = {
+            "L0_keywords": "逗号分隔的3-5个与主题最相关的核心关键词/短语",
+            "L1_core_sentence": "一句（不超过25字）高度精炼的核心摘要，准确点明主题在此聊天中的最主要内容或结论。",
+            "L2_paragraph": "一段（约50-100字）的摘要，对核心句进行扩展，提供必要的上下文、主要论点或事件的简要过程。",
+            "L3_details_list": "一个包含2-4个关键信息点的字符串，这些点是与主题直接相关的、从原文中提取的完整句子（如果句子前有说话人标识，如“爱丽丝:”，也应一并包含），每个句子占一行（用换行符分隔），用以提供支持核心摘要的具体细节、例子或数据。这些句子应尽可能保持原文的完整性。如果聊天记录中没有足够的不同细节支持或找不到合适的完整相关句子，可以减少句子数量，甚至该层级内容可以为空字符串。",
+        }
+        return descriptions.get(level_name, f"{level_name}的描述未定义")
+
 
 class PromptBuilder:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-    def _get_formatted_screen_analysis_log_content( # 新增辅助方法
-        self,
-        mongo_handler: Any,
-        pet_name: str, # pet_name 用于 role_play_character 过滤
-        count: int = 5
+
+    def _get_formatted_screen_analysis_log_content(
+        self, mongo_handler: Any, pet_name: str, count: int = 5
     ) -> str:
-        """
-        从数据库获取并格式化最近的屏幕分析日志。
-        """
         log_lines = []
         if (
             mongo_handler
@@ -45,31 +49,24 @@ class PromptBuilder:
             and hasattr(mongo_handler, "get_recent_screen_analysis_log")
         ):
             raw_logs = mongo_handler.get_recent_screen_analysis_log(
-                count=count,
-                role_play_character=pet_name # 使用 pet_name 作为角色过滤
+                count=count, role_play_character=pet_name
             )
             if raw_logs:
                 for log_entry in raw_logs:
                     text_content = log_entry.get("message_text", "")
                     if text_content:
-                        # 这里我们只记录 Bot 说的话，因为 screen_analysis_log 的 sender 应该都是 Bot
                         log_lines.append(f"- {text_content}")
-        
         if log_lines:
             return "\n".join(log_lines)
         else:
             return "(最近没有屏幕观察记录)"
+
     def _get_formatted_chat_history_content(
         self,
         mongo_handler: Any,
         pet_name: str,
         user_name: str,
     ) -> str:
-        """
-        从数据库获取并格式化聊天历史记录。
-        返回格式化后的聊天记录行字符串，如果无记录则返回特定提示。
-        不包含引导语或结束语。
-        """
         history_lines = []
         if (
             mongo_handler
@@ -131,24 +128,29 @@ class PromptBuilder:
             mongo_handler, pet_name, user_name
         )
         retrieved_memories_context_for_llm = ""
-        memories_retrieved = None
+        memories_retrieved_count = 0
         if (
             hippocampus_manager
             and hasattr(hippocampus_manager, "_initialized")
             and hippocampus_manager._initialized
         ):
             try:
-                memories_retrieved = await hippocampus_manager.get_memory_from_text(
-                    new_user_message_text
+                retrieved_memories = await hippocampus_manager.get_memory_from_text(
+                    txt=new_user_message_text,
                 )
-                if memories_retrieved:
+                memories_retrieved_count = (
+                    len(retrieved_memories) if retrieved_memories else 0
+                )
+                if retrieved_memories:
                     formatted_mems = []
-                    for topic, summary in memories_retrieved:
-                        formatted_mems.append(f"{topic}: {summary}")
+                    for topic, summary_text in retrieved_memories:
+                        formatted_mems.append(
+                            f"关于“{topic}”的记忆片段：{summary_text}"
+                        )
                     if formatted_mems:
                         retrieved_memories_context_for_llm = (
-                            "\n\n以下是过去发生的一些可能相关的事情，供你参考：\n"
-                            + "\n".join(formatted_mems)
+                            "\n\n以下是为你检索到的一些可能相关的记忆片段，供你参考：\n"
+                            + "\n---\n".join(formatted_mems)
                             + "\n"
                         )
             except Exception as e_mem:
@@ -156,26 +158,26 @@ class PromptBuilder:
                     f"检索记忆时发生错误 (PromptBuilder): {e_mem}", exc_info=True
                 )
         logger.debug(
-            f"Memory retrieval for input '{new_user_message_text}': Retrieved memories: {memories_retrieved is not None and len(memories_retrieved) > 0}"
+            f"Memory retrieval for input '{new_user_message_text}': Retrieved {memories_retrieved_count} memories."
         )
         if retrieved_memories_context_for_llm:
             logger.debug(
-                f"Formatted memories context: {retrieved_memories_context_for_llm[:200]}..."
+                f"Formatted memories context for LLM: {retrieved_memories_context_for_llm[:300]}..."
             )
         task_instruction = (
             "---------------------------------\n"
-            f"现在请综合你的角色设定、以上的聊天记录，对 {user_name} 的最新消息进行回复。"
+            f"现在请综合你的角色设定、以上的聊天记录{('和相关的记忆片段' if retrieved_memories_context_for_llm else '')}，对 {user_name} 的最新消息 “{new_user_message_text}” 进行回复。"
         )
         json_format_instruction = (
             "\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
             "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way.\n"
-            f"emotion: This is your current emotion. Its value MUST be one of the following predefined emotions (do not change the values): {emotions_str}.\n"
+            f"emotion: This is your current emotion. Its value MUST be one ofnoges following predefined emotions (do not change the values): {emotions_str}.\n"
             f"text_japanese: str | null, the Japanese version of the content in the 'text' field.\n"
             "JSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
-            f'  "emotion": "{emotions_str[0] if emotions_str else unified_default_emotion}",\n' # Assuming you want to keep this logic
+            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
             "}\n"
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate."
@@ -188,27 +190,23 @@ class PromptBuilder:
             "\n" + system_instruction_part_B,
         ]
         unified_prompt_string = "".join(filter(None, full_prompt_parts))
-        logger.info(
-            f"-----------------------------\n{unified_prompt_string}\n-----------------------------"
-        )
         return unified_prompt_string
 
     def build_screen_analysis_prompt(
-    self,
-    pet_name: str,
-    user_name: str,
-    available_emotions: List[str],
-    mongo_handler: Any,
-    unified_default_emotion: str ,
-) -> str:
+        self,
+        pet_name: str,
+        user_name: str,
+        available_emotions: List[str],
+        mongo_handler: Any,
+        unified_default_emotion: str,
+    ) -> str:
         base_task_description_template = (
             self.config_manager.get_screen_analysis_prompt()
         )
         available_emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         recent_screen_logs_str = self._get_formatted_screen_analysis_log_content(
-            mongo_handler, pet_name, count=5 # 使用 pet_name
+            mongo_handler, pet_name, count=5
         )
-        
         try:
             task_description = base_task_description_template.format(
                 pet_name=pet_name,
@@ -230,19 +228,57 @@ class PromptBuilder:
             "\nJSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
-            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n' # Assuming you want to keep this logic
+            f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复."
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"
-        logger.info(
-            f"-----------------------------\n{final_prompt}\n-----------------------------"
-        )
         return final_prompt
+
+    def build_hierarchical_summary_prompt(
+        self, text_to_summarize: str, time_info: str, topic: str
+    ) -> str:
+        l0_desc = self.config_manager.get_hierarchical_summary_level_description(
+            "L0_keywords"
+        )
+        l1_desc = self.config_manager.get_hierarchical_summary_level_description(
+            "L1_core_sentence"
+        )
+        l2_desc = self.config_manager.get_hierarchical_summary_level_description(
+            "L2_paragraph"
+        )
+        l3_desc = self.config_manager.get_hierarchical_summary_level_description(
+            "L3_details_list"
+        )
+        prompt = (
+            f"你是一个专业的记忆总结助手。请根据以下聊天记录片段、相关的时间信息和指定的主题，为这个主题生成一个结构化的层级摘要。\n\n"
+            f'聊天记录片段:\n"""\n{text_to_summarize}\n"""\n\n'
+            f"时间信息: {time_info}\n"
+            f"指定主题: {topic}\n\n"
+            f"请严格按照以下JSON格式输出。确保每个层级的摘要都紧密围绕指定主题，并且只从提供的聊天记录片段中提取信息。不要添加聊天记录中没有的内容。\n\n"
+            f"输出格式 (JSON对象):\n"
+            f"{{\n"
+            f'  "L0_keywords": "{l0_desc}",\n'
+            f'  "L1_core_sentence": "{l1_desc}",\n'
+            f'  "L2_paragraph": "{l2_desc}",\n'
+            f'  "L3_details_list": "{l3_desc}"\n'
+            f"}}\n\n"
+            f"重要提示：\n"
+            f"- L0_keywords: 应该是直接从文本中提取的关键词或短语，用逗号分隔。\n"
+            f"- L1_core_sentence: 必须是一句非常精炼的话，概括核心。\n"
+            f"- L2_paragraph: 是对L1的扩展，但仍需简洁。\n"
+            f'- L3_details_list: 一个包含2-4个关键信息点的字符串，这些点是与主题直接相关的、从原文中提取的完整句子（如果句子前有说话人标识，如“爱丽丝:”，也应一并包含），每个句子占一行（用换行符分隔），用以提供支持核心摘要的具体细节、例子或数据。这些句子应尽可能保持原文的完整性。如果聊天记录中没有足够的不同细节支持或找不到合适的完整相关句子，可以减少句子数量，甚至该层级内容可以为空字符串。\n'
+            f"- 所有摘要内容都必须是字符串。\n"
+            f"- 确保JSON格式正确无误，不要在JSON对象之外添加任何其他文本或markdown标记。"
+        )
+        return prompt
 
     def build_topic_specific_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
+        logger.warning(
+            "调用了旧的 build_topic_specific_summary_prompt，新流程应使用 build_hierarchical_summary_prompt。"
+        )
         return (
             f"请仔细阅读以下对话内容并生成一段大于300字、不大于1000字的摘要，确保信息准确性，保留好重要内容。\n"
             f"摘要必须只聚焦于 '{topic}' 这个主题（可携带时间信息，如有人名，则对应发送者名字必须要记录）。\n"
