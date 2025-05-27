@@ -6,7 +6,7 @@ __pycache__/
 # C extensions
 *.so
 config/settings.ini
-
+config/
 # 日志文件
 data/app.log
 *.log

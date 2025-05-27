@@ -266,6 +266,11 @@ class ConfigManager:
             self._PARAMS_SECTION, "MAX_TOPICS_PER_SNIPPET", fallback=8
         )
 
+    def get_memory_min_topics_per_snippet(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "MIN_TOPICS_PER_SNIPPET", fallback=1
+        )
+
     def get_memory_retrieval_max_final_memories(self) -> int:
         return self.config.getint(
             self._PARAMS_SECTION, "RETRIEVAL_MAX_FINAL_MEMORIES", fallback=5
@@ -333,6 +338,61 @@ class ConfigManager:
             fallback=0.8,
         )
 
+    def get_memory_topic_calc_len_base(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "TOPIC_CALC_LEN_BASE", fallback=1.0
+        )
+
+    def get_memory_topic_calc_len_log_factor(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "TOPIC_CALC_LEN_LOG_FACTOR", fallback=1.0
+        )
+
+    def get_memory_topic_calc_len_short_thresh(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "TOPIC_CALC_LEN_SHORT_THRESH", fallback=5
+        )
+
+    def get_memory_topic_calc_len_very_short_val(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "TOPIC_CALC_LEN_VERY_SHORT_VAL", fallback=1
+        )
+
+    def get_memory_topic_calc_info_baseline(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "TOPIC_CALC_INFO_BASELINE", fallback=2.5
+        )
+
+    def get_memory_topic_calc_info_scale(self) -> float:
+        return self.config.getfloat(
+            self._PARAMS_SECTION, "TOPIC_CALC_INFO_SCALE", fallback=1.5
+        )
+
+    def get_memory_topic_calc_info_max_absolute(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "TOPIC_CALC_INFO_MAX_ABSOLUTE", fallback=5
+        )
+
+    def get_memory_sample_time_gap_threshold_seconds(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "SAMPLE_TIME_GAP_THRESHOLD_SECONDS", fallback=1800
+        )
+
+    def get_memory_sample_max_anchor_attempts(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "SAMPLE_MAX_ANCHOR_ATTEMPTS", fallback=10
+        )
+
+    def get_memory_sample_min_snippet_messages(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "SAMPLE_MIN_SNIPPET_MESSAGES", fallback=2
+        )
+
+    def get_memory_sample_max_snippet_messages(self) -> int:
+        return self.config.getint(
+            self._PARAMS_SECTION, "SAMPLE_MAX_SNIPPET_MESSAGES", fallback=50
+        )
+
     def get_memory_llm_config(self, llm_type_key_base: str) -> dict:
         nickname_key = f"{llm_type_key_base}_NICKNAME"
         nickname = self.config.get("MEMORY_LLMS", nickname_key, fallback=None)
@@ -341,6 +401,19 @@ class ConfigManager:
         section_name = f"MEMORY_LLM_{nickname}"
         if self.config.has_section(section_name):
             model_config = dict(self.config.items(section_name))
+            for key, value in model_config.items():
+                if isinstance(value, str):
+                    if value.lower() == "true":
+                        model_config[key] = True
+                    elif value.lower() == "false":
+                        model_config[key] = False
+                    elif value.isdigit():
+                        model_config[key] = int(value)
+                    else:
+                        try:
+                            model_config[key] = float(value)
+                        except ValueError:
+                            pass
             return model_config
         else:
             logger.warning(
