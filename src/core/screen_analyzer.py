@@ -200,7 +200,6 @@ class ScreenAnalyzer(QObject):
         self.available_emotions_list = available_emotions
         self._pet_was_visible_before_grab = False
         self._is_enabled = False
-        self._interval_ms = 60000
         self._analysis_chance = 0.1
         self.tts_enabled_globally = False
         self.tts_queue = collections.deque()
@@ -228,12 +227,14 @@ class ScreenAnalyzer(QObject):
 
     def _load_config(self):
         self._is_enabled = self.config_manager.get_screen_analysis_enabled()
-        interval_seconds = self.config_manager.get_screen_analysis_interval_seconds()
-        self._interval_ms = interval_seconds * 1000
+        min_interval_seconds = self.config_manager.get_screen_analysis_min_interval_seconds()
+        max_interval_seconds = self.config_manager.get_screen_analysis_max_interval_seconds()
+        self._min_interval_ms = min_interval_seconds * 1000
+        self._max_interval_ms = max_interval_seconds * 1000
         self._analysis_chance = self.config_manager.get_screen_analysis_chance()
         self.tts_enabled_globally = self.config_manager.get_tts_enabled()
         logger.info(
-            f"Config: ScreenAnalysisEnabled={self._is_enabled}, Interval={interval_seconds}s, Chance={self._analysis_chance*100}%, TTS Globally Enabled={self.tts_enabled_globally}"
+            f"Config: 屏幕截图={self._is_enabled}, 最小触发时间={min_interval_seconds}s,最大触发时间={max_interval_seconds}s, 触发概率={self._analysis_chance*100}%, TTS开启状态={self.tts_enabled_globally}"
         )
 
     def start_monitoring(self):
@@ -247,10 +248,8 @@ class ScreenAnalyzer(QObject):
                 "Cannot start screen analysis monitoring, Gemini client or PetWindow not available."
             )
             return
-        self.timer.start(self._interval_ms)
-        logger.info(
-            f"Screen analysis monitoring started. Interval: {self._interval_ms / 1000}s"
-        )
+        initial_interval_ms = random.randint(self._min_interval_ms, self._max_interval_ms)
+        self.timer.start(initial_interval_ms)
 
     def stop_monitoring(self):
         self.timer.stop()
@@ -283,13 +282,20 @@ class ScreenAnalyzer(QObject):
         if not self._is_enabled:
             self.timer.stop()
             return
-        if random.random() < self._analysis_chance:
+        should_analyze = random.random() < self._analysis_chance
+        if should_analyze:
             if self.analysis_thread and self.analysis_thread.isRunning():
-                logger.info("Screen analysis already in progress. Skipping.")
-                return
-            self._initiate_analysis_sequence()
+                logger.info("屏幕分析线程运行中，跳过本次任务")
+            else:
+                logger.debug(f"开始屏幕分析")
+                self._initiate_analysis_sequence()
         else:
-            pass
+            logger.debug(f"跳过本次屏幕分析任务")
+        
+        if self.timer.isActive(): # 确保定时器仍在活动状态
+            next_interval_ms = self._min_interval_ms
+            next_interval_ms = random.randint(self._min_interval_ms, self._max_interval_ms)
+            self.timer.setInterval(next_interval_ms)
 
     def _initiate_analysis_sequence(self):
         if self.analysis_thread:

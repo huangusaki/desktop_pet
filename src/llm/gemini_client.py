@@ -445,18 +445,32 @@ class GeminiClient:
                 if block_reason_obj is not None
                 else "N/A"
             )
-            safety_ratings_list = getattr(prompt_feedback, "safety_ratings", None)
+            safety_ratings_list = getattr(prompt_feedback, "safety_ratings", None) # 改动1: 默认值可以是None，以便后续检查
             pf_safety_info = []
-            if safety_ratings_list:
+            if safety_ratings_list: # 改动2: 确保 safety_ratings_list 不是 None 也不是空列表才迭代
                 pf_safety_info = [
                     f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
                     for r in safety_ratings_list
                 ]
+            # 或者更明确地：
+            # safety_ratings_actual = getattr(prompt_feedback, "safety_ratings", None)
+            # pf_safety_info = []
+            # if safety_ratings_actual is not None:
+            #     pf_safety_info = [
+            #         f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
+            #         for r in safety_ratings_actual
+            #     ]
+            # else:
+            #     # safety_ratings_actual is None, pf_safety_info 保持空列表
+            #     pass
+
+
             all_feedback_parts.append(
                 f"PromptFeedback:BlockReason={block_reason_str},SafetyRatings=[{','.join(pf_safety_info)}]"
             )
+
         candidates = getattr(response_obj, "candidates", [])
-        if candidates:
+        if candidates: # 确保 candidates 本身不是 None (虽然 getattr 默认 [] 应该能处理)
             for i, candidate in enumerate(candidates):
                 finish_reason_obj = getattr(candidate, "finish_reason", None)
                 finish_reason_str = str(
@@ -464,20 +478,28 @@ class GeminiClient:
                     if finish_reason_obj is not None
                     else "N/A"
                 )
-                cand_safety_ratings_list = getattr(candidate, "safety_ratings", None)
+                cand_safety_ratings_list = getattr(candidate, "safety_ratings", None) # 改动3: 同上
                 cand_safety_info = []
-                if cand_safety_ratings_list:
+                if cand_safety_ratings_list: # 改动4: 同上
                     cand_safety_info = [
                         f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
                         for r in cand_safety_ratings_list
                     ]
+                # 或者更明确地：
+                # cand_safety_ratings_actual = getattr(candidate, "safety_ratings", None)
+                # cand_safety_info = []
+                # if cand_safety_ratings_actual is not None:
+                #     cand_safety_info = [
+                #         f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
+                #         for r in cand_safety_ratings_actual
+                #     ]
+
                 all_feedback_parts.append(
                     f"Candidate[{i}]:FinishReason={finish_reason_str},SafetyRatings=[{','.join(cand_safety_info)}]"
                 )
         if not all_feedback_parts:
             return "Prompt Feedback: (No specific feedback attributes found in response_obj)"
         return "; ".join(all_feedback_parts)
-
     def _handle_general_exception(
         self, e: Exception, context: str, raw_response_object: Any = None
     ) -> Dict[str, Any]:
