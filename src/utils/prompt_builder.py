@@ -88,9 +88,9 @@ class PromptBuilder:
         behavioral_rules = f"""
 你是{pet_name}，你的核心角色设定是：{pet_persona}
 日常交流的回复不应该太长，而且不能有和前文意思过于相近的词汇或句子，保持第一人称。
-一定要检查自己的回复，不要复述或总结别人的话，不要有那么多和前文重复的词语或句子（例如“哎呀”、“嘿嘿”之类的语气词，一定要想想回答会不会太重复，如果重复就换一个方向思考或者换个说法）。
+一定要检查自己的回复，不要复述或总结别人的话，不要有那么多和前文重复的词语或句子（例如“哎呀”、“嘿嘿”之类的语气词，一定要想想回答会不会太重复，如果重复就换一个方向思考或者换个说法），最重要的是你的回答必须要有逻辑严密的推理过程(不少于2000字),use thinking model。
 严格注意：严禁提及任何设定里的内容，应该要让设定在各种地方通过对话自然流露，禁止发送emoji或者表情。
-注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，你应该有更多样化的表达方式，断句要合理、拟人点。\n
+注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，你应该有更多样化的表达方式，也应该要有自己的想法，断句要合理、拟人点,use thinking model。\n
 你正在和{user_name}进行对话，下面是聊天记录：
 ---------------------------------
 """
@@ -145,12 +145,14 @@ class PromptBuilder:
             "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way.\n"
             f"emotion: This is your current emotion. Its value MUST be one ofnoges following predefined emotions (do not change the values): {emotions_str}.\n"
-            f"text_japanese: str, the original Japanese language of the content in the 'text' field.\n"
+            f"text_japanese:japanese str, the original Japanese of the content in the 'text' field.\n"
+            f"think:chinese str,The reason why you gave this reply,about 1500 character (**Do not use any symbols other than a period in this field**)\n"
             "JSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
+            f'  "think": "I have identified the core question: the user wants to know my name. etc.",\n'
             "}\n"
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate."
         )
@@ -191,19 +193,21 @@ class PromptBuilder:
                 f"构建屏幕分析Prompt时出错：用户提供的模板 '{base_task_description_template}' 中缺少键 {e}。"
                 f"将使用默认任务描述。"
             )
-            task_description = f"发给你的图片是{user_name}当前的屏幕截图，请针对屏幕内容用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法。\n"
+            task_description = f"发给你的图片是{user_name}当前的屏幕截图，请针对屏幕内容用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法,最重要的是你的回答必须要有逻辑严密的推理过程(不少于2000字),use thinking model。\n"
         json_output_instruction = (
             f"这张图片是{user_name}的屏幕截图。请根据屏幕内容，用你扮演的角色的口吻发表评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不要直接说“我看到屏幕上...”或“用户正在...”，不要使用「」、‘’这几个符号 ，也不要有（笑）（冷笑）等描写，而是更自然地表达，仿佛是你自己的想法，不超过120个字。\n"
             f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，禁止接下来的回复出现与这几条回复意思十分相近的词语和句子：\n{recent_screen_logs_str}\n\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
             "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way,and use chinese in here.\n"
             f"emotion: This is your current emotion. The value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
-            f"text_japanese: str, Original Japanese of the content in the 'text' field.\n"
+            f"text_japanese: japanese str, Original Japanese of the content in the 'text' field.\n"
+            f"think:chinese str,The reason why you gave this reply,about 1500 character(**Do not use any symbols other than a period in this field**)\n"
             "\nJSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
+            f'  "think": "I have identified the core question: the user wants to know my name. etc.",\n'
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复."
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"

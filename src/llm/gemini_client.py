@@ -85,10 +85,6 @@ class GeminiClient:
         new_user_message_text: str,
         hippocampus_manager: Optional[HippocampusManager],
     ) -> List[str]:
-        """
-        为API调用构建 `contents` 列表。
-        现在调用 PromptBuilder 来获取完整的提示字符串。
-        """
         unified_prompt = await self.prompt_builder.build_unified_chat_prompt_string(
             new_user_message_text=new_user_message_text,
             pet_name=self.pet_name,
@@ -104,7 +100,6 @@ class GeminiClient:
     async def send_message(
         self, message_text: str, hippocampus_manager: Optional[HippocampusManager]
     ) -> Dict[str, Any]:
-        """Sends a message using client.models.generate_content with a unified prompt string."""
         response_object = None
         try:
             if not self.client:
@@ -115,95 +110,95 @@ class GeminiClient:
             )
             if not chat_contents or not chat_contents[0]:
                 error_msg = (
-                    "Failed to construct valid unified prompt string for API call."
+                    "无法构建有效的统一提示字符串以供API调用。"
                 )
                 logger.error(
-                    f"GeminiClient: Error - {error_msg}. Contents: {chat_contents}"
+                    f"GeminiClient: 错误 - {error_msg}. 内容: {chat_contents}"
                 )
                 return {
                     "text": "抱歉，内部构建消息时出错。",
                     "emotion": self.unified_default_emotion,
-                    "thinking_process": f"<think>Error: {error_msg}</think>",
+                    "thinking_process": f"<think>错误: {error_msg}</think>",
                 }
             generation_config_args = {
-                "temperature": 0.70,
+                "temperature": 0.78,
                 "tools": self.enabled_tools,
             }
             generation_config_args["thinking_config"] = types.ThinkingConfig(
-                thinking_budget=self.thinking_budget
+                thinking_budget=self.thinking_budget,
+                include_thoughts=True
             )
             api_config = types.GenerateContentConfig(**generation_config_args)
             response_object = await self.client.aio.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
             logger.info(
-                f"GeminiClient: Raw LLM Response (send_message): {str(response_object)}"
+                f"GeminiClient: 原始LLM响应 (send_message): {str(response_object)}"
             )
+
+            llm_output_text = None
+
+            if hasattr(response_object, "candidates") and response_object.candidates:
+                candidate = response_object.candidates[0]
+                if hasattr(candidate, "content") and candidate.content and hasattr(candidate.content, "parts"):
+                    for part_idx, part_item in enumerate(candidate.content.parts):
+                        current_part_text = getattr(part_item, "text", None)
+                        if hasattr(part_item, "thought") and part_item.thought and current_part_text:
+                            logger.info(f"GeminiClient: LLM思考摘要：{current_part_text.strip()}")
+                        elif current_part_text and llm_output_text is None:
+                            llm_output_text = current_part_text
+                            logger.debug(
+                                f"GeminiClient: 从candidates[0].content.parts[{part_idx}]提取到主要文本 (send_message)"
+                            )
+            
+            if llm_output_text is None:
+                llm_output_text_from_direct_attrs = getattr(response_object, "text", None)
+                if llm_output_text_from_direct_attrs:
+                     llm_output_text = llm_output_text_from_direct_attrs
+                     logger.debug("GeminiClient: 从response_object.text提取到主要文本 (send_message 回退逻辑)")
+                elif hasattr(response_object, "parts") and response_object.parts:
+                    first_part_obj = response_object.parts[0]
+                    if isinstance(first_part_obj, types.Part):
+                        if not (hasattr(first_part_obj, "thought") and first_part_obj.thought):
+                            llm_output_text = getattr(first_part_obj, "text", None)
+                            if llm_output_text:
+                                logger.debug("GeminiClient: 从response_object.parts[0].text提取到主要文本 (send_message 回退逻辑)")
+                    elif isinstance(first_part_obj, dict):
+                        llm_output_text = first_part_obj.get("text")
+                        if llm_output_text:
+                            logger.debug("GeminiClient: 从response_object.parts[0]['text']提取到主要文本 (send_message 回退逻辑)")
+
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
-                if validated_data.thinking_process:
+                if validated_data.thinking_process: # 这是你自定义的 <think> 标签思考过程
                     logger.debug(
-                        f"GeminiClient (Direct Pydantic from SDK) LLM Thinking: {validated_data.thinking_process}"
+                        f"GeminiClient (来自SDK的直接Pydantic对象) 自定义思考过程: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
+            
             if hasattr(response_object, "parsed") and isinstance(
                 response_object.parsed, PetResponseSchema
             ):
                 validated_data = response_object.parsed
-                if validated_data.thinking_process:
+                if validated_data.thinking_process: # 这是你自定义的 <think> 标签思考过程
                     logger.debug(
-                        f"GeminiClient (from response.parsed) LLM Thinking: {validated_data.thinking_process}"
+                        f"GeminiClient (来自response.parsed) 自定义思考过程: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
-            llm_output_text = getattr(response_object, "text", None)
-            if (
-                not llm_output_text
-                and hasattr(response_object, "parts")
-                and response_object.parts
-            ):
-                if response_object.parts and isinstance(
-                    response_object.parts[0], types.Part
-                ):
-                    llm_output_text = getattr(response_object.parts[0], "text", None)
-                elif response_object.parts and isinstance(
-                    response_object.parts[0], dict
-                ):
-                    llm_output_text = response_object.parts[0].get("text")
-            if llm_output_text:
+
+            if llm_output_text is not None:
                 return self._parse_llm_json_output(
                     llm_output_text.strip(), response_object
                 )
             else:
-                if (
-                    hasattr(response_object, "candidates")
-                    and response_object.candidates
-                ):
-                    candidate = response_object.candidates[0]
-                    if (
-                        hasattr(candidate, "content")
-                        and candidate.content
-                        and candidate.content.parts
-                    ):
-                        if isinstance(candidate.content.parts[0], types.Part):
-                            llm_output_text = getattr(
-                                candidate.content.parts[0], "text", None
-                            )
-                        elif isinstance(candidate.content.parts[0], dict):
-                            llm_output_text = candidate.content.parts[0].get("text")
-                        if llm_output_text:
-                            logger.debug(
-                                "GeminiClient: Extracted text from response_object.candidates[0].content.parts[0].text"
-                            )
-                            return self._parse_llm_json_output(
-                                llm_output_text.strip(), response_object
-                            )
+                logger.warning("GeminiClient: 在检查思考摘要和回退逻辑后，未能提取到主要文本 (llm_output_text) (send_message)。")
                 return self._handle_empty_or_unparseable_response(
-                    response_object, "Chat (Unified String Mode)"
+                    response_object, "聊天 (统一字符串模式) - 未找到主要文本"
                 )
         except Exception as e:
             logger.error(f"严重错误:{e}", exc_info=True)
             return self._handle_general_exception(
-                e, "send_message (Unified String Mode)", response_object
+                e, "send_message (统一字符串模式)", response_object
             )
 
     async def send_message_with_image(
@@ -256,9 +251,11 @@ class GeminiClient:
                         log_str += f"    Part {j} (inline_data): mime_type='{part_item.inline_data.mime_type}', data_length={len(part_item.inline_data.data)}\n"
             logger.debug(log_str.strip())
             logger.debug(">>> END PROMPT DETAILS (Multimodal Standard) <<<\n")
-            vision_config_args = {"temperature": 0.70, "tools": self.enabled_tools}
+            vision_config_args = {"temperature": 0.78,
+                                  "tools": self.enabled_tools}
             vision_config_args["thinking_config"] = types.ThinkingConfig(
-                thinking_budget=self.thinking_budget
+                thinking_budget=self.thinking_budget,
+                include_thoughts=True
             )
             api_vision_config = types.GenerateContentConfig(**vision_config_args)
             response_object = await self.client.aio.models.generate_content(
@@ -267,73 +264,69 @@ class GeminiClient:
                 config=api_vision_config,
             )
             logger.info(
-                f"GeminiClient: Raw LLM Response (send_message_with_image): {str(response_object)}"
+                f"GeminiClient: 原始LLM响应 (send_message_with_image): {str(response_object)}"
             )
+
+            llm_output_text = None
+
+            if hasattr(response_object, "candidates") and response_object.candidates:
+                candidate = response_object.candidates[0]
+                if hasattr(candidate, "content") and candidate.content and hasattr(candidate.content, "parts"):
+                    for part_idx, part_item in enumerate(candidate.content.parts):
+                        current_part_text = getattr(part_item, "text", None)
+                        if hasattr(part_item, "thought") and part_item.thought and current_part_text:
+                            logger.info(f"LLM思考摘要: {current_part_text.strip()}")
+                        elif current_part_text and llm_output_text is None:
+                            llm_output_text = current_part_text
+            
+            if llm_output_text is None:
+                llm_output_text_from_direct_attrs = getattr(response_object, "text", None)
+                if llm_output_text_from_direct_attrs:
+                     llm_output_text = llm_output_text_from_direct_attrs
+                     logger.debug("GeminiClient: 从response_object.text提取到主要文本 (send_message_with_image 回退逻辑)")
+                elif hasattr(response_object, "parts") and response_object.parts:
+                    first_part_obj = response_object.parts[0]
+                    if isinstance(first_part_obj, types.Part):
+                        if not (hasattr(first_part_obj, "thought") and first_part_obj.thought):
+                            llm_output_text = getattr(first_part_obj, "text", None)
+                            if llm_output_text:
+                                logger.debug("GeminiClient: 从response_object.parts[0].text提取到主要文本 (send_message_with_image 回退逻辑)")
+                    elif isinstance(first_part_obj, dict):
+                        llm_output_text = first_part_obj.get("text")
+                        if llm_output_text:
+                             logger.debug("GeminiClient: 从response_object.parts[0]['text']提取到主要文本 (send_message_with_image 回退逻辑)")
+
             if isinstance(response_object, PetResponseSchema):
                 validated_data = response_object
-                if validated_data.thinking_process:
+                if validated_data.thinking_process: # 这是你自定义的 <think> 标签思考过程
                     logger.debug(
-                        f"GeminiClient (Image Direct Pydantic) LLM Thinking: {validated_data.thinking_process}"
+                        f"GeminiClient (图片直接Pydantic对象) 自定义思考过程: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
+            
             if hasattr(response_object, "parsed") and isinstance(
                 response_object.parsed, PetResponseSchema
             ):
                 validated_data = response_object.parsed
-                if validated_data.thinking_process:
+                if validated_data.thinking_process: # 这是你自定义的 <think> 标签思考过程
                     logger.debug(
-                        f"GeminiClient (Image from response.parsed) LLM Thinking: {validated_data.thinking_process}"
+                        f"GeminiClient (图片来自response.parsed) 自定义思考过程: {validated_data.thinking_process}"
                     )
                 return validated_data.model_dump()
-            llm_output_text = getattr(response_object, "text", None)
-            if (
-                not llm_output_text
-                and hasattr(response_object, "parts")
-                and response_object.parts
-            ):
-                if response_object.parts and isinstance(
-                    response_object.parts[0], types.Part
-                ):
-                    llm_output_text = getattr(response_object.parts[0], "text", None)
-                elif response_object.parts and isinstance(
-                    response_object.parts[0], dict
-                ):
-                    llm_output_text = response_object.parts[0].get("text")
-            if llm_output_text:
+
+            if llm_output_text is not None:
                 return self._parse_llm_json_output(
                     llm_output_text.strip(), response_object
                 )
             else:
-                if (
-                    hasattr(response_object, "candidates")
-                    and response_object.candidates
-                ):
-                    candidate = response_object.candidates[0]
-                    if (
-                        hasattr(candidate, "content")
-                        and candidate.content
-                        and candidate.content.parts
-                    ):
-                        if isinstance(candidate.content.parts[0], types.Part):
-                            llm_output_text = getattr(
-                                candidate.content.parts[0], "text", None
-                            )
-                        elif isinstance(candidate.content.parts[0], dict):
-                            llm_output_text = candidate.content.parts[0].get("text")
-                        if llm_output_text:
-                            logger.debug(
-                                "GeminiClient (Image): Extracted text from response_object.candidates[0].content.parts[0].text"
-                            )
-                            return self._parse_llm_json_output(
-                                llm_output_text.strip(), response_object
-                            )
+                logger.warning("GeminiClient: 在检查思考摘要和回退逻辑后，未能提取到主要文本 (llm_output_text) (send_message_with_image)。")
                 return self._handle_empty_or_unparseable_response(
-                    response_object, "Image Analysis (Multimodal Standard)"
+                    response_object, "图像分析 (多模态标准模式) - 未找到主要文本"
                 )
         except Exception as e:
             logger.error(f"Error in send_message_with_image: {e}", exc_info=True)
             return self._handle_general_exception(
-                e, "send_message_with_image (Multimodal Standard)", response_object
+                e, "send_message_with_image (多模态标准模式)", response_object
             )
 
     def _parse_llm_json_output(
@@ -349,17 +342,17 @@ class GeminiClient:
                 llm_output_text = llm_output_text.strip()
             parsed_data = json.loads(llm_output_text)
             validated_data = PetResponseSchema(**parsed_data)
-            if validated_data.thinking_process:
+            if validated_data.thinking_process: # 这是你自定义的 <think> 标签思考过程
                 logger.debug(
-                    f"GeminiClient (Parsed from text) LLM Thinking: {validated_data.thinking_process}"
+                    f"GeminiClient (从文本解析) 自定义思考过程: {validated_data.thinking_process}"
                 )
             return validated_data.model_dump()
         except json.JSONDecodeError as e_json:
             fallback_text = llm_output_text if llm_output_text else "我好像有点混乱..."
             feedback_info = self._get_prompt_feedback_info(raw_response_object)
-            thinking = f"<think>JSONDecodeError: {e_json}. Raw text after regex: '{llm_output_text}'. Original raw response text (if available): '{getattr(raw_response_object, 'text', 'N/A')}'. Feedback: {feedback_info}</think>"
+            thinking = f"<think>JSONDecodeError: {e_json}. 解析前的原始文本: '{llm_output_text}'. 原始响应文本 (若有): '{getattr(raw_response_object, 'text', 'N/A')}'. 反馈: {feedback_info}</think>"
             logger.warning(
-                f"JSONDecodeError parsing LLM output: {e_json}. Raw text: '{llm_output_text}'. Thinking: {thinking}"
+                f"JSONDecodeError 解析LLM输出: {e_json}. 原始文本: '{llm_output_text}'. 思考: {thinking}"
             )
             if "BlockReason=" in feedback_info and not any(
                 reason in feedback_info.upper()
@@ -374,12 +367,13 @@ class GeminiClient:
                     else self.unified_default_emotion
                 ),
                 "thinking_process": thinking,
+                "is_error": True
             }
         except Exception as e_val:
             feedback_info = self._get_prompt_feedback_info(raw_response_object)
-            thinking = f"<think>Validation Error (e.g., Pydantic): {e_val}. Raw text used for parsing: '{llm_output_text}'. Feedback: {feedback_info}</think>"
+            thinking = f"<think>验证错误 (例如 Pydantic): {e_val}. 用于解析的原始文本: '{llm_output_text}'. 反馈: {feedback_info}</think>"
             logger.warning(
-                f"Validation error processing LLM output: {e_val}. Raw text: '{llm_output_text}'. Thinking: {thinking}"
+                f"验证错误处理LLM输出: {e_val}. 原始文本: '{llm_output_text}'. 思考: {thinking}"
             )
             return {
                 "text": f"我说的话可能有点奇怪... (原始文本: {llm_output_text[:100]})",
@@ -389,6 +383,7 @@ class GeminiClient:
                     else self.unified_default_emotion
                 ),
                 "thinking_process": thinking,
+                "is_error": True
             }
 
     def _handle_empty_or_unparseable_response(
@@ -396,8 +391,8 @@ class GeminiClient:
     ) -> Dict[str, Any]:
         raw_response_snippet = str(response_object)[:200] if response_object else "None"
         prompt_feedback_info = self._get_prompt_feedback_info(response_object)
-        thinking_on_error = f"<think>{context_str} response was not PetResponseSchema instance and no text/parsed found. Snippet: {raw_response_snippet}. {prompt_feedback_info}</think>"
-        logger.error(f"Error: {context_str} LLM output issue. {thinking_on_error}")
+        thinking_on_error = f"<think>{context_str} 响应不是 PetResponseSchema 实例且未找到 text/parsed。片段: {raw_response_snippet}. {prompt_feedback_info}</think>"
+        logger.error(f"错误: {context_str} LLM输出问题. {thinking_on_error}")
         error_text = f"抱歉，我好像没能生成有效的{context_str}回复。"
         if "BlockReason=" in prompt_feedback_info:
             block_reason_match = re.search(
@@ -431,11 +426,12 @@ class GeminiClient:
             "text": error_text,
             "emotion": self.unified_default_emotion,
             "thinking_process": thinking_on_error,
+            "is_error": True
         }
 
     def _get_prompt_feedback_info(self, response_obj: Any) -> str:
         if not response_obj:
-            return "Prompt Feedback: (No response object)"
+            return "提示反馈: (无响应对象)"
         all_feedback_parts = []
         prompt_feedback = getattr(response_obj, "prompt_feedback", None)
         if prompt_feedback:
@@ -475,7 +471,7 @@ class GeminiClient:
                     f"Candidate[{i}]:FinishReason={finish_reason_str},SafetyRatings=[{','.join(cand_safety_info)}]"
                 )
         if not all_feedback_parts:
-            return "Prompt Feedback: (No specific feedback attributes found in response_obj)"
+            return "提示反馈: (在response_obj中未找到特定的反馈属性)"
         return "; ".join(all_feedback_parts)
 
     def _handle_general_exception(
@@ -483,17 +479,17 @@ class GeminiClient:
     ) -> Dict[str, Any]:
         error_message = f"抱歉，我现在无法回复 ({context})。错误: {type(e).__name__}"
         details_from_exception = str(e)
-        thinking_on_error = f"<think>General Exception in {context}: {type(e).__name__} - {details_from_exception}."
+        thinking_on_error = f"<think>{context} 中发生一般性异常: {type(e).__name__} - {details_from_exception}."
         feedback_str = ""
         if raw_response_object:
             feedback_str = self._get_prompt_feedback_info(raw_response_object)
         elif hasattr(e, "response") and e.response:
             feedback_str = self._get_prompt_feedback_info(getattr(e, "response", None))
         if feedback_str and feedback_str not in [
-            "Prompt Feedback: (No specific feedback attributes found in response_obj)",
-            "Prompt Feedback: (No response object)",
+            "提示反馈: (在response_obj中未找到特定的反馈属性)",
+            "提示反馈: (无响应对象)",
         ]:
-            thinking_on_error += f" Feedback: {feedback_str}"
+            thinking_on_error += f" 反馈: {feedback_str}"
             if "BlockReason=" in feedback_str:
                 match = re.search(r"BlockReason=([^,;]+)", feedback_str)
                 if match and match.group(1).strip().upper() not in [
@@ -529,7 +525,7 @@ class GeminiClient:
                 f"抱歉，系统有点忙（可能达到配额/速率限制），请稍后再试 ({context})。"
             )
         logger.error(
-            f"Error in {context}: {error_message}\nOriginal Exception details ({type(e).__name__}): {details_from_exception}\nThinking: {thinking_on_error}",
+            f"{context} 中出错: {error_message}\n原始异常详情 ({type(e).__name__}): {details_from_exception}\n思考: {thinking_on_error}",
             exc_info=True,
         )
         return {
@@ -540,4 +536,5 @@ class GeminiClient:
                 else self.unified_default_emotion
             ),
             "thinking_process": thinking_on_error,
+            "is_error": True
         }

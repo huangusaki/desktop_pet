@@ -605,7 +605,7 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         pet_name = (
             config_manager_global.get_pet_name() if config_manager_global else "Bot"
         )
-        display_text = f"（看了一眼屏幕）{text}"
+        display_text = f"{text}"
         chat_dialog_global._add_message_to_display(
             sender_name_for_log_only=pet_name, message=display_text, is_user=False
         )
@@ -614,8 +614,9 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
         and mongo_handler_global.is_connected()
         and config_manager_global
     ):
+        user_name = config_manager_global.get_user_name()
         pet_name = config_manager_global.get_pet_name()
-        db_text = f"{text}"
+        db_text = f"（{pet_name}看了一眼{user_name}的屏幕）{text}"
         save_to_chat_history = (
             config_manager_global.get_screen_analysis_save_to_chat_history()
         )
@@ -625,14 +626,14 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
                 message_text=db_text,
                 role_play_character=pet_name,
             )
-            logger.info(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
+            logger.debug(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
         else:
             mongo_handler_global.insert_screen_analysis_log_entry(
                 sender=pet_name,
                 message_text=db_text,
                 role_play_character=pet_name,
             )
-            logger.info(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
+            logger.debug(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
     elif not config_manager_global:
         logger.warning("Main: ConfigManager 未初始化，无法保存屏幕反应。")
     elif not (mongo_handler_global and mongo_handler_global.is_connected()):

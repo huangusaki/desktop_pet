@@ -312,7 +312,7 @@ class ChatDialog(QDialog):
                     message_text=user_message,
                     hippocampus_manager=self.hippocampus_manager,
                 ),
-                timeout=60.0,
+                timeout=90.0,
             )
             return response_data
         except asyncio.TimeoutError:
@@ -328,6 +328,7 @@ class ChatDialog(QDialog):
             return {
                 "text": f"好像有个报错: {str(e)}",
                 "emotion": "default",
+                "is_error": True
             }
 
     def _handle_async_response(self, response_data: Dict[str, Any]):
@@ -336,15 +337,17 @@ class ChatDialog(QDialog):
         pet_text = response_data.get("text", "我好像不知道该说什么了...")
         pet_emotion = response_data.get("emotion", "default")
         text_japanese = response_data.get("text_japanese")
+        is_error_response = response_data.get("is_error", False)
         if text_japanese and text_japanese.strip():
             self.chat_text_for_tts_ready.emit(text_japanese)
-        if self.mongo_handler and self.mongo_handler.is_connected():
-            actual_pet_name = self.config_manager.get_pet_name()
-            self.mongo_handler.insert_chat_message(
-                sender=actual_pet_name,
-                message_text=pet_text,
-                role_play_character=self.current_role_play_character,
-            )
+        if not is_error_response: 
+            if self.mongo_handler and self.mongo_handler.is_connected():
+                actual_pet_name = self.config_manager.get_pet_name()
+                self.mongo_handler.insert_chat_message(
+                    sender=actual_pet_name,
+                    message_text=pet_text,
+                    role_play_character=self.current_role_play_character,
+                )
         self.speech_and_emotion_received.emit(pet_text, pet_emotion)
         if self._is_closing:
             logger.info(
@@ -354,7 +357,7 @@ class ChatDialog(QDialog):
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             self.input_field.setFocus()
-            self._add_message_to_display(self.pet_name, pet_text, is_user=False)
+            self._add_message_to_display(self.pet_name, pet_text, is_user=False) 
         if current_thread and current_thread.isRunning():
             current_thread.quit()
         self._cleanup_async_resources()

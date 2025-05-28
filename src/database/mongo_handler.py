@@ -237,7 +237,7 @@ class MongoHandler:
                 .sort("timestamp", DESCENDING)
                 .limit(count)
             )
-            return messages[::-1]
+            return messages
         except Exception as e:
             logger.error(
                 f"从 MongoDB ('{self.screen_analysis_log_collection_name}') 获取屏幕分析日志时出错: {e}",
