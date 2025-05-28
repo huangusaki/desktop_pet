@@ -133,7 +133,7 @@ class GeminiClient:
                 thinking_budget=self.thinking_budget
             )
             api_config = types.GenerateContentConfig(**generation_config_args)
-            response_object = self.client.models.generate_content(
+            response_object = await self.client.aio.models.generate_content(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
             logger.info(
@@ -261,7 +261,7 @@ class GeminiClient:
                 thinking_budget=self.thinking_budget
             )
             api_vision_config = types.GenerateContentConfig(**vision_config_args)
-            response_object = self.client.models.generate_content(
+            response_object = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=contents_for_vision,
                 config=api_vision_config,
@@ -445,11 +445,13 @@ class GeminiClient:
                 if block_reason_obj is not None
                 else "N/A"
             )
-            safety_ratings_list = getattr(prompt_feedback, "safety_ratings", [])
-            pf_safety_info = [
-                f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
-                for r in safety_ratings_list
-            ]
+            safety_ratings_list = getattr(prompt_feedback, "safety_ratings", None)
+            pf_safety_info = []
+            if safety_ratings_list:
+                pf_safety_info = [
+                    f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
+                    for r in safety_ratings_list
+                ]
             all_feedback_parts.append(
                 f"PromptFeedback:BlockReason={block_reason_str},SafetyRatings=[{','.join(pf_safety_info)}]"
             )
@@ -462,11 +464,13 @@ class GeminiClient:
                     if finish_reason_obj is not None
                     else "N/A"
                 )
-                cand_safety_ratings = getattr(candidate, "safety_ratings", [])
-                cand_safety_info = [
-                    f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
-                    for r in cand_safety_ratings
-                ]
+                cand_safety_ratings_list = getattr(candidate, "safety_ratings", None)
+                cand_safety_info = []
+                if cand_safety_ratings_list:
+                    cand_safety_info = [
+                        f"{getattr(r.category, 'name', r.category)}:{getattr(r.probability, 'name', r.probability)}"
+                        for r in cand_safety_ratings_list
+                    ]
                 all_feedback_parts.append(
                     f"Candidate[{i}]:FinishReason={finish_reason_str},SafetyRatings=[{','.join(cand_safety_info)}]"
                 )

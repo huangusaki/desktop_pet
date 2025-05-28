@@ -838,16 +838,18 @@ if __name__ == "__main__":
         QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
         AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
-    if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
-        logger.info("Main: 准备执行首次记忆构建...")
-        initial_build_future = AsyncioHelper.schedule_task(initial_memory_build())
-        if initial_build_future:
-            logger.info("Main: 首次记忆构建任务已调度到后台执行。")
-            pass
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
+        if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
+            logger.info("Main: 准备执行启动时记忆巩固（去重）任务...")
+            consolidate_future = AsyncioHelper.schedule_task(run_memory_consolidate())
+            if consolidate_future:
+                logger.info("Main: 启动时记忆巩固任务已调度到后台执行。")
+            else:
+                logger.error("Main: 无法调度启动时记忆巩固任务。")
         else:
-            logger.error("Main: 无法调度首次记忆构建任务。")
+            logger.error("Main: Asyncio loop 不可用，无法执行启动时记忆巩固任务。")
     else:
-        logger.error("Main: Asyncio loop 不可用，无法执行首次记忆构建。")
+        logger.info("Main: 跳过启动时记忆巩固，记忆系统未初始化或未导入。")
     if not config_manager_global or not assets_path_global:
         QMessageBox.critical(
             None, "配置错误", "ConfigManager 或资源路径未初始化。程序将退出。"

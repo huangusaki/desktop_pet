@@ -224,7 +224,7 @@ class ParahippocampalGyrus:
                     )[1]
                 ):
                     logger.warning(
-                        f"主题 '{topic_concept}' (样本 {i+1}) 所有层级摘要均未能成功获取嵌入，跳过此主题。"
+                        f"主题 '{topic_concept}' (样本 {i+1}) 关键层级摘要(如L1)未能成功获取嵌入，跳过此主题。"
                     )
                     continue
                 current_event_id = f"event_{i}_{topic_concept.replace(' ','_')}_{str(uuid.uuid4())[:8]}"
@@ -403,8 +403,13 @@ class ParahippocampalGyrus:
         )
         logger.info(
             f"开始整合记忆 (层级化)... 检查比例:{consolidation_percentage_to_check:.1%}, "
-            f"合并阈值 (基于L1摘要):{consolidation_similarity_threshold:.2f}"
+            f"合并阈值 (基于L1,L2,L3摘要相似度):{consolidation_similarity_threshold:.2f}"
         )
+        summary_levels_required = [
+            "L1_core_sentence",
+            "L2_paragraph",
+            "L3_details_list",
+        ]
         eligible_nodes_for_consolidation = []
         for node_name in list(self.memory_graph.G.nodes()):
             node_tuple = self.memory_graph.get_dot(node_name)
@@ -412,22 +417,30 @@ class ParahippocampalGyrus:
                 continue
             _concept, node_data = node_tuple
             memory_events = node_data.get("memory_events", [])
-            valid_events_for_comparison_count = 0
+            valid_events_for_consolidation_in_node_count = 0
             for event in memory_events:
                 hs = event.get("hierarchical_summaries", {})
-                l1_data = hs.get("L1_core_sentence")
-                if (
-                    l1_data
-                    and isinstance(l1_data, tuple)
-                    and len(l1_data) == 2
-                    and l1_data[0]
-                    and l1_data[1]
-                ):
-                    valid_events_for_comparison_count += 1
-            if valid_events_for_comparison_count >= 2:
+                is_complete_event = True
+                for level in summary_levels_required:
+                    summary_data = hs.get(level)
+                    if not (
+                        summary_data
+                        and isinstance(summary_data, tuple)
+                        and len(summary_data) == 2
+                        and summary_data[0]
+                        and summary_data[1]
+                        and isinstance(summary_data[1], list)
+                    ):
+                        is_complete_event = False
+                        break
+                if is_complete_event:
+                    valid_events_for_consolidation_in_node_count += 1
+            if valid_events_for_consolidation_in_node_count >= 2:
                 eligible_nodes_for_consolidation.append(node_name)
         if not eligible_nodes_for_consolidation:
-            logger.info("无包含至少2个带有效L1摘要和嵌入的记忆事件的节点，无需整合。")
+            logger.info(
+                "无包含至少2个带完整L1,L2,L3摘要和嵌入的记忆事件的节点，无需整合。"
+            )
             return
         num_nodes_to_actually_check = max(
             1,
@@ -444,110 +457,121 @@ class ParahippocampalGyrus:
         logger.info(
             f"将检查 {len(nodes_to_check_sample)}/{len(eligible_nodes_for_consolidation)} 个合格节点进行记忆事件整合。"
         )
-        total_merged_event_pairs_count = 0
-        modified_node_names_set = set()
+        total_consolidation_actions = 0
+        nodes_modified_by_consolidation = set()
         current_timestamp = datetime.now().timestamp()
         for node_name in nodes_to_check_sample:
             node_tuple = self.memory_graph.get_dot(node_name)
             if not node_tuple:
                 continue
             _concept, node_data = node_tuple
-            memory_events_in_node = list(node_data.get("memory_events", []))
-            events_with_valid_l1_for_comparison = []
-            for event_idx, event_data in enumerate(memory_events_in_node):
+            current_memory_events_in_node = list(node_data.get("memory_events", []))
+            complete_events_for_comparison = []
+            for idx, event_data in enumerate(current_memory_events_in_node):
                 hs = event_data.get("hierarchical_summaries", {})
-                l1_summary_tuple = hs.get("L1_core_sentence")
-                if (
-                    l1_summary_tuple
-                    and isinstance(l1_summary_tuple, tuple)
-                    and len(l1_summary_tuple) == 2
-                    and l1_summary_tuple[0]
-                    and l1_summary_tuple[1]
-                ):
-                    events_with_valid_l1_for_comparison.append(
-                        (
-                            event_idx,
-                            l1_summary_tuple[0],
-                            l1_summary_tuple[1],
-                            event_data,
-                        )
-                    )
-            if len(events_with_valid_l1_for_comparison) < 2:
-                continue
-            events_with_valid_l1_for_comparison.sort(
-                key=lambda x: calculate_information_content(x[1]), reverse=True
-            )
-            final_events_for_this_node = []
-            processed_original_indices = set()
-            for i in range(len(events_with_valid_l1_for_comparison)):
-                original_idx_i, summary_i_text, embedding_i, event_data_i = (
-                    events_with_valid_l1_for_comparison[i]
-                )
-                if original_idx_i in processed_original_indices:
-                    continue
-                current_group_representative_event = event_data_i
-                for j in range(i + 1, len(events_with_valid_l1_for_comparison)):
-                    original_idx_j, summary_j_text, embedding_j, event_data_j = (
-                        events_with_valid_l1_for_comparison[j]
-                    )
-                    if original_idx_j in processed_original_indices:
-                        continue
+                event_summaries_payload = {}
+                is_event_complete_for_consolidation = True
+                for level in summary_levels_required:
+                    summary_tuple = hs.get(level)
                     if (
-                        cosine_similarity(embedding_i, embedding_j)
-                        >= consolidation_similarity_threshold
+                        summary_tuple
+                        and isinstance(summary_tuple, tuple)
+                        and len(summary_tuple) == 2
+                        and summary_tuple[0]
+                        and isinstance(summary_tuple[0], str)
+                        and summary_tuple[1]
+                        and isinstance(summary_tuple[1], list)
+                    ):
+                        event_summaries_payload[level] = {
+                            "text": summary_tuple[0],
+                            "embedding": summary_tuple[1],
+                        }
+                    else:
+                        is_event_complete_for_consolidation = False
+                        break
+                if is_event_complete_for_consolidation:
+                    complete_events_for_comparison.append(
+                        {
+                            "original_list_index": idx,
+                            "event_id": event_data.get(
+                                "event_id", f"missing_id_at_consol_{idx}"
+                            ),
+                            "summaries": event_summaries_payload,
+                        }
+                    )
+            if len(complete_events_for_comparison) < 2:
+                continue
+            complete_events_for_comparison.sort(
+                key=lambda x: calculate_information_content(
+                    x["summaries"]["L1_core_sentence"]["text"]
+                ),
+                reverse=True,
+            )
+            indices_to_remove_from_original_list = set()
+            processed_original_indices = set()
+            for i in range(len(complete_events_for_comparison)):
+                event_i_details = complete_events_for_comparison[i]
+                if event_i_details["original_list_index"] in processed_original_indices:
+                    continue
+                for j in range(i + 1, len(complete_events_for_comparison)):
+                    event_j_details = complete_events_for_comparison[j]
+                    if (
+                        event_j_details["original_list_index"]
+                        in processed_original_indices
+                    ):
+                        continue
+                    sim_l1 = cosine_similarity(
+                        event_i_details["summaries"]["L1_core_sentence"]["embedding"],
+                        event_j_details["summaries"]["L1_core_sentence"]["embedding"],
+                    )
+                    sim_l2 = cosine_similarity(
+                        event_i_details["summaries"]["L2_paragraph"]["embedding"],
+                        event_j_details["summaries"]["L2_paragraph"]["embedding"],
+                    )
+                    sim_l3 = cosine_similarity(
+                        event_i_details["summaries"]["L3_details_list"]["embedding"],
+                        event_j_details["summaries"]["L3_details_list"]["embedding"],
+                    )
+                    if (
+                        sim_l1 >= consolidation_similarity_threshold
+                        and sim_l2 >= consolidation_similarity_threshold
+                        and sim_l3 >= consolidation_similarity_threshold
                     ):
                         logger.info(
-                            f"整合节点'{node_name}': 事件 (L1: '{summary_j_text[:30]}...') 与 事件 (L1: '{summary_i_text[:30]}...') 相似. "
-                            f"保留信息熵较高者 (即 '{summary_i_text[:30]}...')."
+                            f"整合节点'{node_name}': 事件 (ID: {event_j_details['event_id']}, L1: '{event_j_details['summaries']['L1_core_sentence']['text'][:20]}...') "
+                            f"与 事件 (ID: {event_i_details['event_id']}, L1: '{event_i_details['summaries']['L1_core_sentence']['text'][:20]}...') "
+                            f"在L1,L2,L3均相似 (L1:{sim_l1:.2f}, L2:{sim_l2:.2f}, L3:{sim_l3:.2f}). "
+                            f"保留L1信息熵较高者 (ID: {event_i_details['event_id']})."
                         )
-                        processed_original_indices.add(original_idx_j)
-                        total_merged_event_pairs_count += 1
-                        modified_node_names_set.add(node_name)
-                final_events_for_this_node.append(current_group_representative_event)
-                processed_original_indices.add(original_idx_i)
-            if len(final_events_for_this_node) < len(memory_events_in_node):
-                original_event_ids_kept = {
-                    ev.get("event_id") for ev in final_events_for_this_node
-                }
-                truly_final_events = list(final_events_for_this_node)
-                for original_event in memory_events_in_node:
-                    is_comparable_and_processed = False
-                    for idx, _, _, _ in events_with_valid_l1_for_comparison:
-                        if memory_events_in_node[idx].get(
-                            "event_id"
-                        ) == original_event.get("event_id"):
-                            if idx in processed_original_indices:
-                                is_comparable_and_processed = True
-                            break
-                    if (
-                        not is_comparable_and_processed
-                        and original_event.get("event_id")
-                        not in original_event_ids_kept
-                    ):
-                        hs_original = original_event.get("hierarchical_summaries", {})
-                        l1_data_original = hs_original.get("L1_core_sentence")
-                        if not (
-                            l1_data_original
-                            and isinstance(l1_data_original, tuple)
-                            and len(l1_data_original) == 2
-                            and l1_data_original[0]
-                            and l1_data_original[1]
-                        ):
-                            truly_final_events.append(original_event)
+                        indices_to_remove_from_original_list.add(
+                            event_j_details["original_list_index"]
+                        )
+                        processed_original_indices.add(
+                            event_j_details["original_list_index"]
+                        )
+                        total_consolidation_actions += 1
+                        nodes_modified_by_consolidation.add(node_name)
+                processed_original_indices.add(event_i_details["original_list_index"])
+            if indices_to_remove_from_original_list:
+                new_memory_events_for_node = [
+                    event
+                    for idx, event in enumerate(current_memory_events_in_node)
+                    if idx not in indices_to_remove_from_original_list
+                ]
                 self.memory_graph.G.nodes[node_name][
                     "memory_events"
-                ] = truly_final_events
+                ] = new_memory_events_for_node
                 self.memory_graph.G.nodes[node_name][
                     "last_modified"
                 ] = current_timestamp
-            elif modified_node_names_set:
+            elif node_name in nodes_modified_by_consolidation:
                 self.memory_graph.G.nodes[node_name][
                     "last_modified"
                 ] = current_timestamp
-        if total_merged_event_pairs_count > 0:
+        if total_consolidation_actions > 0:
             logger.info(
-                f"记忆整合共合并移除了 {total_merged_event_pairs_count} 个相似的记忆事件，"
-                f"分布在 {len(modified_node_names_set)} 个概念节点中。即将同步到数据库..."
+                f"记忆整合共执行了 {total_consolidation_actions} 次事件合并（移除）操作，"
+                f"影响了 {len(nodes_modified_by_consolidation)} 个概念节点。即将同步到数据库..."
             )
             if not self.hippocampus.entorhinal_cortex:
                 logger.error("EntorhinalCortex 未初始化，无法同步整合操作。")

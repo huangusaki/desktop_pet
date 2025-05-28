@@ -173,14 +173,6 @@ class ScreenAnalysisWorker(QObject):
                 )
         except Exception as e_process_llm:
             raise
-        self.analysis_worker = ScreenAnalysisWorker(
-            gemini_client=self.gemini_client,
-            prompt_builder=self.prompt_builder,
-            config_manager=self.config_manager,
-            pet_name=self.pet_name,
-            user_name=self.user_name,
-            available_emotions=self.available_emotions_list,
-        )
 
 
 class ScreenAnalyzer(QObject):
