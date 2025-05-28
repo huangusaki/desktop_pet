@@ -143,10 +143,15 @@ class ConfigManager:
         )
 
     def get_screen_analysis_min_interval_seconds(self) -> int:
-        return self.config.getint("SCREEN_ANALYSIS", "MIN_INTERVAL_SECONDS", fallback=60) # 默认30秒
+        return self.config.getint(
+            "SCREEN_ANALYSIS", "MIN_INTERVAL_SECONDS", fallback=60
+        )
 
     def get_screen_analysis_max_interval_seconds(self) -> int:
-        return self.config.getint("SCREEN_ANALYSIS", "MAX_INTERVAL_SECONDS", fallback=300) # 默认90秒
+        return self.config.getint(
+            "SCREEN_ANALYSIS", "MAX_INTERVAL_SECONDS", fallback=300
+        )
+
     def get_screen_analysis_chance(self) -> float:
         return self.config.getfloat("SCREEN_ANALYSIS", "CHANCE", fallback=0.1)
 

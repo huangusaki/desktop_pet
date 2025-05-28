@@ -838,21 +838,12 @@ if __name__ == "__main__":
         QMessageBox.critical(None, "初始化失败", "关键服务初始化失败，程序将退出。")
         AsyncioHelper.stop_asyncio_loop()
         sys.exit(1)
-    if hippocampus_manager_global and hippocampus_manager_global._initialized: # 确保记忆系统已初始化
+    if hippocampus_manager_global and hippocampus_manager_global._initialized:
         if AsyncioHelper._loop and AsyncioHelper._loop.is_running():
             logger.info("Main: 准备执行启动时记忆巩固（去重）任务...")
-            consolidate_future = AsyncioHelper.schedule_task(run_memory_consolidate()) # <--- 调度记忆巩固
+            consolidate_future = AsyncioHelper.schedule_task(run_memory_consolidate())
             if consolidate_future:
                 logger.info("Main: 启动时记忆巩固任务已调度到后台执行。")
-                # 你可以选择等待它完成，或者让它在后台运行
-                # 如果想等待（会阻塞启动直到它完成，不推荐用于耗时操作）：
-                # try:
-                #     consolidate_future.result(timeout=300) # 设置一个超时，例如5分钟
-                #     logger.info("Main: 启动时记忆巩固任务完成。")
-                # except asyncio.TimeoutError:
-                #     logger.error("Main: 启动时记忆巩固任务超时。")
-                # except Exception as e:
-                #     logger.error(f"Main: 启动时记忆巩固任务执行出错: {e}")
             else:
                 logger.error("Main: 无法调度启动时记忆巩固任务。")
         else:

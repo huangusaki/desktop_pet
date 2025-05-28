@@ -309,17 +309,19 @@ class ChatDialog(QDialog):
         try:
             response_data = await asyncio.wait_for(
                 self.gemini_client.send_message(
-                    message_text=user_message, hippocampus_manager=self.hippocampus_manager
+                    message_text=user_message,
+                    hippocampus_manager=self.hippocampus_manager,
                 ),
-                timeout=60.0  
+                timeout=60.0,
             )
             return response_data
         except asyncio.TimeoutError:
-            logger.warning(f"Gemini API call timed out for message: {user_message[:50]}...")
-            # 返回一个表示超时的特定响应结构
+            logger.warning(
+                f"Gemini API call timed out for message: {user_message[:50]}..."
+            )
             return {
                 "text": f"呜，{self.pet_name}思考的时间好像太久了……",
-                "emotion": "default", # 或者一个特定的 "timeout" 情绪
+                "emotion": "default",
             }
         except Exception as e:
             logger.error(f"Error in _send_message_async_logic: {e}", exc_info=True)

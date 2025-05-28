@@ -227,8 +227,12 @@ class ScreenAnalyzer(QObject):
 
     def _load_config(self):
         self._is_enabled = self.config_manager.get_screen_analysis_enabled()
-        min_interval_seconds = self.config_manager.get_screen_analysis_min_interval_seconds()
-        max_interval_seconds = self.config_manager.get_screen_analysis_max_interval_seconds()
+        min_interval_seconds = (
+            self.config_manager.get_screen_analysis_min_interval_seconds()
+        )
+        max_interval_seconds = (
+            self.config_manager.get_screen_analysis_max_interval_seconds()
+        )
         self._min_interval_ms = min_interval_seconds * 1000
         self._max_interval_ms = max_interval_seconds * 1000
         self._analysis_chance = self.config_manager.get_screen_analysis_chance()
@@ -248,7 +252,9 @@ class ScreenAnalyzer(QObject):
                 "Cannot start screen analysis monitoring, Gemini client or PetWindow not available."
             )
             return
-        initial_interval_ms = random.randint(self._min_interval_ms, self._max_interval_ms)
+        initial_interval_ms = random.randint(
+            self._min_interval_ms, self._max_interval_ms
+        )
         self.timer.start(initial_interval_ms)
 
     def stop_monitoring(self):
@@ -291,10 +297,11 @@ class ScreenAnalyzer(QObject):
                 self._initiate_analysis_sequence()
         else:
             logger.debug(f"跳过本次屏幕分析任务")
-        
-        if self.timer.isActive(): # 确保定时器仍在活动状态
+        if self.timer.isActive():
             next_interval_ms = self._min_interval_ms
-            next_interval_ms = random.randint(self._min_interval_ms, self._max_interval_ms)
+            next_interval_ms = random.randint(
+                self._min_interval_ms, self._max_interval_ms
+            )
             self.timer.setInterval(next_interval_ms)
 
     def _initiate_analysis_sequence(self):
