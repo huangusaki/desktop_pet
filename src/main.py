@@ -20,6 +20,13 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Optional, Dict, Any
 import logging
 
+try:
+    from src.core.agent_core import AgentCore
+except ImportError:
+    AgentCore = None
+    logging.getLogger("main").warning(
+        "Main: AgentCore could not be imported initially. Agent mode might be unavailable."
+    )
 logger = logging.getLogger("main")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -34,6 +41,7 @@ screen_analyzer_global: Optional[ScreenAnalyzer] = None
 assets_path_global: Optional[str] = None
 avatar_base_path_global: Optional[str] = None
 pet_avatar_path_global: Optional[str] = None
+agent_core_global: Optional[AgentCore] = None
 user_avatar_path_global: Optional[str] = None
 available_emotions_global: List[str] = ["default"]
 MEMORY_BUILD_INTERVAL = 60 * 60 * 1000
@@ -232,7 +240,7 @@ def setup_environment_and_config() -> bool:
                     "[GEMINI]\nAPI_KEY = YOUR_API_KEY_HERE\nMODEL_NAME = gemini-1.5-flash-latest\nHTTP_PROXY =\nHTTPS_PROXY =\n\n"
                 )
                 cf.write(
-                    "[PET]\nINITIAL_IMAGE_FILENAME = default.png\nNAME = 小助手\nPERSONA = 你是一个友好、乐于助人的桌面Bot...\n\n"
+                    "[PET]\nINITIAL_IMAGE_FILENAME = default.png\nNAME = 小助手\nPERSONA = 你是一个友好、乐于助人的桌面Bot...\nAGENT_MODE_EMOTIONS = neutral, focused, helpful\n\n"
                 )
                 cf.write("[USER]\nNAME = 主人\n\n")
                 cf.write(
@@ -325,14 +333,15 @@ def setup_environment_and_config() -> bool:
 
 async def initialize_async_services():
     global config_manager_global, prompt_builder_global, gemini_client_global, mongo_handler_global, hippocampus_manager_global
-    global available_emotions_global
+    global available_emotions_global, agent_core_global, AgentCore
     if not config_manager_global:
         logger.critical(
             "CRITICAL: ConfigManager not initialized before initialize_async_services."
         )
         return False
-    if prompt_builder_global is None and config_manager_global:
+    if prompt_builder_global is None:
         prompt_builder_global = PromptBuilder(config_manager_global)
+        logger.info("PromptBuilder initialized.")
     mongo_ok = False
     try:
         conn_str = config_manager_global.get_mongo_connection_string()
@@ -343,6 +352,7 @@ async def initialize_async_services():
             mongo_handler_global.get_database() is not None
         ):
             mongo_ok = True
+            logger.info("MongoDB handler initialized and connected.")
         else:
             QMessageBox.warning(
                 None,
@@ -352,7 +362,7 @@ async def initialize_async_services():
             logger.error(
                 "ERROR: MongoDB connection failed or DB not accessible after MongoHandler instantiation."
             )
-            if not mongo_handler_global.is_connected():
+            if mongo_handler_global and not mongo_handler_global.is_connected():
                 mongo_handler_global = None
     except Exception as e:
         QMessageBox.warning(
@@ -360,15 +370,14 @@ async def initialize_async_services():
             "MongoDB初始化严重错误",
             f"初始化 MongoDB 时发生严重错误: {e}。\n程序将无法正常运行。",
         )
-        logger.critical(f"CRITICAL ERROR: MongoDB initialization exception: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.critical(
+            f"CRITICAL ERROR: MongoDB initialization exception: {e}", exc_info=True
+        )
         mongo_handler_global = None
         mongo_ok = False
     if not mongo_ok:
         logger.critical(
-            "CRITICAL: MongoDB initialization failed. Aborting service initialization."
+            "CRITICAL: MongoDB initialization failed. Aborting further service initialization."
         )
         return False
     gemini_ok = False
@@ -391,11 +400,6 @@ async def initialize_async_services():
                     "CRITICAL ERROR: PromptBuilder not initialized before GeminiClient."
                 )
                 return False
-            if not mongo_handler_global:
-                logger.critical(
-                    "CRITICAL ERROR: MongoHandler not initialized before GeminiClient (but mongo_ok was true, this is an inconsistency)."
-                )
-                return False
             gemini_client_global = GeminiClient(
                 api_key=chat_api_key,
                 model_name=chat_model_name,
@@ -408,19 +412,60 @@ async def initialize_async_services():
                 config_manager=config_manager_global,
             )
             gemini_ok = True
+            logger.info("GeminiClient initialized successfully.")
     except Exception as e:
         QMessageBox.critical(None, "Gemini客户端初始化错误", f"错误: {e}")
-        logger.critical(f"CRITICAL ERROR: Gemini client initialization exception: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.critical(
+            f"CRITICAL ERROR: Gemini client initialization exception: {e}",
+            exc_info=True,
+        )
         gemini_client_global = None
         gemini_ok = False
     if not gemini_ok:
         logger.critical(
-            "CRITICAL: Gemini client initialization failed. Aborting service initialization."
+            "CRITICAL: Gemini client initialization failed. Aborting further service initialization."
         )
         return False
+    if AgentCore is None:
+        try:
+            from src.core.agent_core import AgentCore as AgentCore_reimport
+
+            AgentCore = AgentCore_reimport
+        except ImportError:
+            logger.error(
+                "Main: AgentCore re-import failed. Agent mode will be unavailable."
+            )
+            AgentCore = None
+    if (
+        AgentCore
+        and config_manager_global
+        and prompt_builder_global
+        and gemini_client_global
+    ):
+        try:
+            agent_core_global = AgentCore(
+                config_manager=config_manager_global,
+                prompt_builder=prompt_builder_global,
+                gemini_client=gemini_client_global,
+            )
+            logger.info("AgentCore initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to initialize AgentCore: {e}", exc_info=True)
+            agent_core_global = None
+    else:
+        missing_deps_agent = []
+        if not AgentCore:
+            missing_deps_agent.append("AgentCore module")
+        if not config_manager_global:
+            missing_deps_agent.append("ConfigManager")
+        if not prompt_builder_global:
+            missing_deps_agent.append("PromptBuilder")
+        if not gemini_client_global:
+            missing_deps_agent.append("GeminiClient")
+        logger.error(
+            f"Cannot initialize AgentCore due to missing dependencies: {', '.join(missing_deps_agent)}."
+        )
+        agent_core_global = None
     if HippocampusManager is None or MemoryConfig is None:
         logger.warning(
             "WARNING: HippocampusManager or MemoryConfig was not imported, skipping its initialization."
@@ -474,9 +519,17 @@ async def initialize_async_services():
     return True
 
 
+def handle_agent_mode_toggled(is_active: bool):
+    global chat_dialog_global
+    logger.info(f"Main: Agent mode toggled to {is_active} from PetWindow signal.")
+    if chat_dialog_global:
+        chat_dialog_global.set_agent_mode_active(is_active)
+
+
 def open_chat_dialog_handler():
     global chat_dialog_global, gemini_client_global, pet_window_global, mongo_handler_global
     global config_manager_global, pet_avatar_path_global, user_avatar_path_global, hippocampus_manager_global
+    global agent_core_global
     if chat_dialog_global is None:
         if not pet_window_global:
             QMessageBox.warning(None, "错误", "Bot窗口尚未初始化。")
@@ -501,6 +554,7 @@ def open_chat_dialog_handler():
                 hippocampus_manager=hippocampus_manager_global,
                 pet_avatar_path=pet_avatar_path_global,
                 user_avatar_path=user_avatar_path_global,
+                agent_core=agent_core_global,
                 parent=pet_window_global,
             )
         except Exception as e:
@@ -514,6 +568,9 @@ def open_chat_dialog_handler():
             chat_dialog_global.speech_and_emotion_received.connect(
                 pet_window_global.update_speech_and_emotion
             )
+            pet_window_global.agent_mode_toggled_signal.connect(
+                chat_dialog_global.set_agent_mode_active
+            )
         if screen_analyzer_global:
             chat_dialog_global.chat_text_for_tts_ready.connect(
                 screen_analyzer_global.play_tts_from_chat
@@ -526,6 +583,10 @@ def open_chat_dialog_handler():
                 "Main: screen_analyzer_global is None. Cannot connect chat_text_for_tts_ready signal."
             )
     if chat_dialog_global:
+        if agent_core_global and hasattr(agent_core_global, "is_agent_mode_active"):
+            chat_dialog_global.set_agent_mode_active(
+                agent_core_global.is_agent_mode_active
+            )
         if chat_dialog_global.isHidden():
             if pet_window_global:
                 pet_rect = pet_window_global.geometry()
@@ -602,13 +663,14 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
     if pet_window_global:
         pet_window_global.update_speech_and_emotion(text, emotion)
     if chat_dialog_global and not chat_dialog_global.isHidden():
-        pet_name = (
-            config_manager_global.get_pet_name() if config_manager_global else "Bot"
-        )
-        display_text = f"{text}"
-        chat_dialog_global._add_message_to_display(
-            sender_name_for_log_only=pet_name, message=display_text, is_user=False
-        )
+        if not chat_dialog_global.is_agent_mode_active_chat:
+            pet_name = (
+                config_manager_global.get_pet_name() if config_manager_global else "Bot"
+            )
+            display_text = f"{text}"
+            chat_dialog_global._add_message_to_display(
+                sender_name_for_log_only=pet_name, message=display_text, is_user=False
+            )
     if (
         mongo_handler_global
         and mongo_handler_global.is_connected()
@@ -628,12 +690,24 @@ def handle_screen_analysis_reaction(text: str, emotion: str):
             )
             logger.debug(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
         else:
-            mongo_handler_global.insert_screen_analysis_log_entry(
-                sender=pet_name,
-                message_text=db_text,
-                role_play_character=pet_name,
-            )
-            logger.debug(f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。")
+            if hasattr(mongo_handler_global, "insert_screen_analysis_log_entry"):
+                mongo_handler_global.insert_screen_analysis_log_entry(
+                    sender=pet_name,
+                    message_text=db_text,
+                    role_play_character=pet_name,
+                )
+                logger.debug(
+                    f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。"
+                )
+            else:
+                mongo_handler_global.insert_chat_message(
+                    sender=pet_name,
+                    message_text=f"[Screen Log] {db_text}",
+                    role_play_character=pet_name,
+                )
+                logger.debug(
+                    f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录 (fallback)."
+                )
     elif not config_manager_global:
         logger.warning("Main: ConfigManager 未初始化，无法保存屏幕反应。")
     elif not (mongo_handler_global and mongo_handler_global.is_connected()):
@@ -766,7 +840,7 @@ def schedule_memory_tasks(app: QApplication):
 
 if __name__ == "__main__":
     coloredlogs.install(
-        level="info",
+        level="INFO",
         fmt="%(asctime)s [%(name)s:%(lineno)d] %(levelname)s: %(message)s",
         level_styles={
             "debug": {"color": "cyan"},
@@ -865,8 +939,11 @@ if __name__ == "__main__":
         initial_image_path=initial_pet_image_abs_path,
         assets_base_path=assets_path_global,
         available_emotions=available_emotions_global,
+        config_manager=config_manager_global,
+        agent_core=agent_core_global,
     )
     pet_window_global.request_open_chat_dialog.connect(open_chat_dialog_handler)
+    pet_window_global.agent_mode_toggled_signal.connect(handle_agent_mode_toggled)
     tts_globally_enabled_main = False
     screen_analysis_feature_enabled_main = False
     if config_manager_global:
@@ -926,7 +1003,7 @@ if __name__ == "__main__":
             logger.info(
                 "INFO Main: Screen analyzer not started (unknown reason, check dependencies and enabled flags)."
             )
-    initial_pet_message_text = "你好！我在这里哦！"
+    initial_pet_message_text = "start！"
     if (
         mongo_handler_global
         and mongo_handler_global.is_connected()

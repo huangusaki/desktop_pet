@@ -1,8 +1,15 @@
-from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication, QMenu
+from PyQt6.QtWidgets import (
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QApplication,
+    QMenu,
+    QSizePolicy,
+)
 from PyQt6.QtGui import QPixmap, QMouseEvent, QGuiApplication, QAction, QActionGroup
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QTimer
 import os
-from typing import List
+from typing import List, Any, Optional
 import logging
 
 logger = logging.getLogger("MainWindow")
@@ -10,12 +17,15 @@ logger = logging.getLogger("MainWindow")
 
 class PetWindow(QWidget):
     request_open_chat_dialog = pyqtSignal()
+    agent_mode_toggled_signal = pyqtSignal(bool)
 
     def __init__(
         self,
         initial_image_path: str,
         assets_base_path: str,
         available_emotions: List[str],
+        config_manager: Any,
+        agent_core: Optional[Any] = None,
     ):
         super().__init__()
         self._drag_pos = QPoint()
@@ -29,15 +39,28 @@ class PetWindow(QWidget):
             available_emotions if available_emotions else ["default"]
         )
         self.pet_size_preference = "medium"
+        self.config_manager = config_manager
+        self.agent_core = agent_core
+        self.is_agent_mode_active_internal = False
+        if self.agent_core:
+            if hasattr(self.agent_core, "is_agent_mode_active"):
+                self.is_agent_mode_active_internal = (
+                    self.agent_core.is_agent_mode_active
+                )
+            else:
+                logger.warning(
+                    "AgentCore provided but 'is_agent_mode_active' attribute not found. Defaulting to False."
+                )
+                self.is_agent_mode_active_internal = False
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        self.main_v_layout = QVBoxLayout(self)
+        self.main_v_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_v_layout.setSpacing(2)
         self.speech_bubble_label = QLabel(self)
         self.speech_bubble_label.setWordWrap(True)
         self.speech_bubble_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -49,28 +72,35 @@ class PetWindow(QWidget):
             "  border-radius: 10px;"
             "  margin-left: 5px;"
             "  margin-right: 5px;"
-            "  margin-top: -3px;"
             "}"
         )
         self.speech_bubble_label.setText("")
         self.speech_bubble_label.setVisible(False)
-        layout.addWidget(self.speech_bubble_label)
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.image_label)
+        self.main_v_layout.addWidget(self.speech_bubble_label)
+        self.main_v_layout.addWidget(self.image_label)
+        self.setLayout(self.main_v_layout)
         self.set_emotion(
             self.current_emotion, initial_image_path_override=initial_image_path
         )
 
     def _set_error_text(self, text):
+        self.image_label.setPixmap(QPixmap())
         self.image_label.setText(text)
         self.image_label.setStyleSheet(
-            "QLabel { color: red; background-color: rgba(200, 200, 200, 150); padding: 10px; }"
+            "QLabel { color: red; background-color: rgba(200, 200, 200, 150); padding: 10px; border-radius: 5px; }"
         )
         if hasattr(self, "speech_bubble_label"):
             self.speech_bubble_label.setText("")
             self.speech_bubble_label.setVisible(False)
-        self.resize(180, 120)
+        self.resize(self.main_v_layout.sizeHint())
+        QTimer.singleShot(
+            0,
+            lambda: self.resize(
+                180, 120 if not self.speech_bubble_label.isVisible() else 160
+            ),
+        )
 
     def _auto_align_to_taskbar_right(self):
         try:
@@ -81,15 +111,20 @@ class PetWindow(QWidget):
                 )
                 self.move(800, 600)
                 return
-            available_geometry = screen.availableGeometry()
             QApplication.instance().processEvents()
-            new_x = available_geometry.right() - self.width()
-            new_y = available_geometry.bottom() - self.height()
+            available_geometry = screen.availableGeometry()
+            window_width = self.width()
+            window_height = self.height()
+            new_x = available_geometry.right() - window_width
+            new_y = available_geometry.bottom() - window_height
             new_x = max(available_geometry.left(), new_x)
             new_y = max(available_geometry.top(), new_y) + 1
             self.move(new_x, new_y)
         except Exception as e:
-            logger.error(f"自动对齐时出错: {e}. 使用默认定位。", exc_info=True)
+            logger.error(
+                f"Error during auto-alignment: {e}. Using default position.",
+                exc_info=True,
+            )
             self.move(800, 600)
 
     def update_speech_and_emotion(self, text: str, emotion: str):
@@ -173,7 +208,7 @@ class PetWindow(QWidget):
                 logger.error(
                     f"No valid image path was used to load raw_pixmap for emotion {self.current_emotion}. Cannot create cache key."
                 )
-                self._set_error_text(f"图片路径错误\nEm: {self.current_emotion}")
+                self._set_error_text(f"Image Path Error\nEm: {self.current_emotion}")
                 return
             cache_key_path_for_scaled = actual_image_path_used_for_raw_pixmap
             cache_key = (cache_key_path_for_scaled, target_width)
@@ -207,14 +242,13 @@ class PetWindow(QWidget):
             self.image_label.setPixmap(scaled_pixmap)
             self.image_label.adjustSize()
             if hasattr(self, "speech_bubble_label"):
-                img_width = self.image_label.width()
-                if img_width > 0:
-                    self.speech_bubble_label.setMaximumWidth(img_width)
-                else:
-                    self.speech_bubble_label.setMaximumWidth(150)
+                speech_bubble_max_width = (
+                    self.image_label.width() if self.image_label.width() > 50 else 150
+                )
+                self.speech_bubble_label.setMaximumWidth(speech_bubble_max_width)
             self.adjustSize()
         else:
-            self._set_error_text(f"图片丢失\nEm: {self.current_emotion}")
+            self._set_error_text(f"Image Missing\nEm: {self.current_emotion}")
             logger.error(
                 f"Failed to set emotion '{self.current_emotion}'. Scaled pixmap was null or invalid."
             )
@@ -223,6 +257,7 @@ class PetWindow(QWidget):
     def set_speech_text(self, text: str):
         old_y = 0
         old_height = 0
+        was_visible = self.speech_bubble_label.isVisible()
         if self.isVisible():
             old_y = self.y()
             old_height = self.height()
@@ -234,15 +269,17 @@ class PetWindow(QWidget):
         else:
             if self.speech_bubble_label.isVisible():
                 self.speech_bubble_label.setVisible(False)
+        QApplication.processEvents()
         self.adjustSize()
         if self.isVisible() and old_height > 0:
             new_height = self.height()
             height_change = new_height - old_height
-            if height_change != 0:
+            if (was_visible != self.speech_bubble_label.isVisible()) or (
+                height_change != 0
+            ):
                 self.move(self.x(), old_y - height_change)
 
     def _perform_initial_alignment(self):
-        """Helper method to perform and flag initial alignment."""
         if not self._initial_pos_set:
             self._auto_align_to_taskbar_right()
             self._initial_pos_set = True
@@ -250,7 +287,7 @@ class PetWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         if not self._initial_pos_set:
-            QTimer.singleShot(0, self._perform_initial_alignment)
+            QTimer.singleShot(100, self._perform_initial_alignment)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -297,7 +334,52 @@ class PetWindow(QWidget):
         if self.pet_size_preference != size_name:
             self.pet_size_preference = size_name
             self.scaled_pixmap_cache.clear()
-            self.set_emotion(self.current_emotion)
+            current_emotion_temp = self.current_emotion
+            current_text_temp = self.speech_bubble_label.text()
+            is_speech_visible_temp = self.speech_bubble_label.isVisible()
+            self.set_emotion(current_emotion_temp)
+            if is_speech_visible_temp:
+                self.set_speech_text(current_text_temp)
+            else:
+                self.set_speech_text("")
+
+    def _toggle_agent_mode(self, checked: bool):
+        if self.agent_core:
+            self.agent_core.set_agent_mode(checked)
+            self.is_agent_mode_active_internal = checked
+            self.agent_mode_toggled_signal.emit(checked)
+            pet_name_for_speech = "Pet"
+            if self.config_manager and hasattr(self.config_manager, "get_pet_name"):
+                pet_name_for_speech = self.config_manager.get_pet_name()
+            if checked:
+                self.set_speech_text("Agent on")
+                agent_mode_emotion = "default"
+                agent_emotions_config = self.config_manager.config.get(
+                    "PET", "AGENT_MODE_EMOTIONS", fallback="neutral, focused, helpful"
+                )
+                preferred_agent_emotions = [
+                    e.strip().lower() for e in agent_emotions_config.split(",")
+                ]
+                if "focused" in preferred_agent_emotions and "focused" in [
+                    e.lower() for e in self.available_emotions_for_test
+                ]:
+                    agent_mode_emotion = "focused"
+                elif "neutral" in preferred_agent_emotions and "neutral" in [
+                    e.lower() for e in self.available_emotions_for_test
+                ]:
+                    agent_mode_emotion = "neutral"
+                self.set_emotion(agent_mode_emotion)
+            else:
+                self.set_speech_text("Agent off")
+                self.set_emotion("default")
+            logger.info(f"Toggled Agent Mode to: {checked}")
+        else:
+            logger.warning(
+                "Attempted to toggle Agent Mode, but AgentCore is not available."
+            )
+            self.set_speech_text("Agent核心模块不可用。")
+            if hasattr(self, "agent_mode_action_in_menu"):
+                self.agent_mode_action_in_menu.setChecked(False)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -307,32 +389,48 @@ class PetWindow(QWidget):
         size_menu = menu.addMenu("调整大小")
         size_action_group = QActionGroup(self)
         size_action_group.setExclusive(True)
-        small_action = size_menu.addAction("小")
+        small_action = QAction("小", self)
         small_action.setCheckable(True)
         small_action.setChecked(self.pet_size_preference == "small")
         small_action.triggered.connect(lambda: self._set_pet_size("small"))
         size_action_group.addAction(small_action)
-        medium_action = size_menu.addAction("中 (默认)")
+        size_menu.addAction(small_action)
+        medium_action = QAction("中 (默认)", self)
         medium_action.setCheckable(True)
         medium_action.setChecked(self.pet_size_preference == "medium")
         medium_action.triggered.connect(lambda: self._set_pet_size("medium"))
         size_action_group.addAction(medium_action)
-        large_action = size_menu.addAction("大")
+        size_menu.addAction(medium_action)
+        large_action = QAction("大", self)
         large_action.setCheckable(True)
         large_action.setChecked(self.pet_size_preference == "large")
         large_action.triggered.connect(lambda: self._set_pet_size("large"))
         size_action_group.addAction(large_action)
+        size_menu.addAction(large_action)
+        menu.addSeparator()
+        self.agent_mode_action_in_menu = QAction("Agent模式 (实验性)", self)
+        self.agent_mode_action_in_menu.setCheckable(True)
+        if self.agent_core:
+            self.agent_mode_action_in_menu.setChecked(
+                self.is_agent_mode_active_internal
+            )
+            self.agent_mode_action_in_menu.triggered.connect(self._toggle_agent_mode)
+        else:
+            self.agent_mode_action_in_menu.setText("Agent模式 (不可用)")
+            self.agent_mode_action_in_menu.setEnabled(False)
+        menu.addAction(self.agent_mode_action_in_menu)
         menu.addSeparator()
         testable_emotions = self.available_emotions_for_test
         emotion_menu = menu.addMenu("测试情绪")
         if testable_emotions:
             for em in sorted(testable_emotions):
-                action = emotion_menu.addAction(em.capitalize())
+                action = QAction(em.capitalize(), self)
                 action.triggered.connect(
                     lambda checked=False, emotion_name_for_lambda=em: self.set_emotion(
                         emotion_name_for_lambda
                     )
                 )
+                emotion_menu.addAction(action)
         else:
             emotion_menu.addAction("无可用情绪").setEnabled(False)
         menu.addSeparator()

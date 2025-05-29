@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Tuple, Optional
 from ..utils.config_manager import ConfigManager
 import logging
-
+import datetime
 logger = logging.getLogger("PromptBuilder")
 
 
@@ -10,27 +10,49 @@ class PromptBuilder:
         self.config_manager = config_manager
 
     def _get_formatted_screen_analysis_log_content(
-        self, mongo_handler: Any, pet_name: str, count: int = 5
+        self,
+        mongo_handler: Any,
+        pet_name: str,
+        read_from_main_chat_history: bool,
+        count: int = 10,
     ) -> str:
         log_lines = []
-        if (
+        if not (
             mongo_handler
             and hasattr(mongo_handler, "is_connected")
             and mongo_handler.is_connected()
-            and hasattr(mongo_handler, "get_recent_screen_analysis_log")
         ):
-            raw_logs = mongo_handler.get_recent_screen_analysis_log(
-                count=count, role_play_character=pet_name
-            )
-            if raw_logs:
-                for log_entry in raw_logs:
-                    text_content = log_entry.get("message_text", "")
-                    if text_content:
+            return "(数据库未连接或不可用)"
+        raw_logs: List[Dict[str, Any]] = []
+        if read_from_main_chat_history:
+            if hasattr(mongo_handler, "get_recent_chat_history"):
+                raw_logs = mongo_handler.get_recent_chat_history(
+                    count=count, role_play_character=pet_name
+                )
+            else:
+                logger.warning("MongoHandler missing get_recent_chat_history method.")
+        else:
+            if hasattr(mongo_handler, "get_recent_screen_analysis_log"):
+                raw_logs = mongo_handler.get_recent_screen_analysis_log(
+                    count=count, role_play_character=pet_name
+                )
+            else:
+                logger.warning(
+                    "MongoHandler missing get_recent_screen_analysis_log method."
+                )
+        if raw_logs:
+            for log_entry in raw_logs:
+                text_content = log_entry.get("message_text", "")
+                if text_content:
+                    if read_from_main_chat_history:
+                        if log_entry.get("sender") == pet_name:
+                            log_lines.append(f"- {text_content}")
+                    else:
                         log_lines.append(f"- {text_content}")
         if log_lines:
             return "\n".join(log_lines)
         else:
-            return "(最近没有屏幕观察记录)"
+            return "(最近没有相关记录)"
 
     def _get_formatted_chat_history_content(
         self,
@@ -58,6 +80,15 @@ class PromptBuilder:
                 for msg_entry in raw_db_history:
                     sender_val = msg_entry.get("sender")
                     text_content = msg_entry.get("message_text", "")
+                    timestamp_unix = msg_entry.get("timestamp")
+                    if timestamp_unix: # 新增：检查时间戳是否存在
+                        try:
+                            # 将时间戳（可能为字符串或数字）转换为浮点数
+                            dt_object = datetime.datetime.fromtimestamp(float(timestamp_unix))
+                            formatted_time_prefix = dt_object.strftime("%Y-%m-%d %H:%M") + " " # 新增：格式化时间
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"格式化聊天记录时间戳 '{timestamp_unix}' 时出错: {e}")
+                            # 如果转换失败，formatted_time_prefix 将保持为空字符串
                     speaker_prefix = ""
                     if sender_val == user_name:
                         speaker_prefix = f"{user_name}: "
@@ -66,7 +97,7 @@ class PromptBuilder:
                     elif sender_val and isinstance(sender_val, str):
                         speaker_prefix = f"{sender_val}: "
                     if text_content and speaker_prefix:
-                        history_lines.append(f"{speaker_prefix}{text_content}")
+                        history_lines.append(f"{formatted_time_prefix}{speaker_prefix}{text_content}") 
         if history_lines:
             return "\n".join(history_lines)
         else:
@@ -88,9 +119,9 @@ class PromptBuilder:
         behavioral_rules = f"""
 你是{pet_name}，你的核心角色设定是：{pet_persona}
 日常交流的回复不应该太长，而且不能有和前文意思过于相近的词汇或句子，保持第一人称。
-一定要检查自己的回复，不要复述或总结别人的话，不要有那么多和前文重复的词语或句子（例如“哎呀”、“嘿嘿”之类的语气词，一定要想想回答会不会太重复，如果重复就换一个方向思考或者换个说法），最重要的是你的回答必须要有逻辑严密的推理过程(不少于2000字),use thinking model。
+一定要检查自己的回复，不要复述或总结别人的话，不要有那么多和前文重复的词语或句子（例如“哎呀”、“嘿嘿”之类的语气词，一定要想想回答会不会太重复，如果重复就换一个方向思考或者换个说法），最重要的是你的回答必须要有逻辑严密的推理过程(不少于1000字),use thinking model。
 严格注意：严禁提及任何设定里的内容，应该要让设定在各种地方通过对话自然流露，禁止发送emoji或者表情。
-注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，你应该有更多样化的表达方式，也应该要有自己的想法，断句要合理、拟人点,use thinking model。\n
+注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，不要可以突出人设，你应该有更多样化的表达方式，也应该要有自己的想法，断句要合理、拟人点,use thinking model。\n
 你正在和{user_name}进行对话，下面是聊天记录：
 ---------------------------------
 """
@@ -141,12 +172,11 @@ class PromptBuilder:
             f"现在请综合你的角色设定、以上的聊天记录{('和相关的记忆片段' if retrieved_memories_context_for_llm else '')}，对 {user_name} 进行回复（不要频繁称呼{user_name} ）。"
         )
         json_format_instruction = (
-            "\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
-            "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
+            "\nattention: The output format is extremely important. Your MUST strictly follow JSON format and ONLY contain a JSON object with no other text or markdown (like ```json or ```) . The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way.\n"
             f"emotion: This is your current emotion. Its value MUST be one ofnoges following predefined emotions (do not change the values): {emotions_str}.\n"
             f"text_japanese:japanese str, the original Japanese of the content in the 'text' field.\n"
-            f"think:chinese str,The reason why you gave this reply,about 1500 character (**Do not use any symbols other than a period in this field**)\n"
+            f"think:english str,The reason why you gave this reply,about 3000 character (**Do not use any symbols other than a period in this field!**)\n"
             "JSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
@@ -179,8 +209,14 @@ class PromptBuilder:
             self.config_manager.get_screen_analysis_prompt()
         )
         available_emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
+        save_to_chat_history_config = (
+            self.config_manager.get_screen_analysis_save_to_chat_history()
+        )
         recent_screen_logs_str = self._get_formatted_screen_analysis_log_content(
-            mongo_handler, pet_name, count=5
+            mongo_handler,
+            pet_name=pet_name,
+            read_from_main_chat_history=save_to_chat_history_config,
+            count=5,
         )
         try:
             task_description = base_task_description_template.format(
@@ -193,15 +229,15 @@ class PromptBuilder:
                 f"构建屏幕分析Prompt时出错：用户提供的模板 '{base_task_description_template}' 中缺少键 {e}。"
                 f"将使用默认任务描述。"
             )
-            task_description = f"发给你的图片是{user_name}当前的屏幕截图，请针对屏幕内容用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法,最重要的是你的回答必须要有逻辑严密的推理过程(不少于2000字),use thinking model。\n"
+            task_description = f"发给你的图片是{user_name}当前的屏幕截图，请针对屏幕内容用你角色的口吻发表一句评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不超过120个字，\n不要直接说“我看到屏幕上...”或“用户正在...”，而是更自然地表达，仿佛是你自己的想法,最重要的是你的回答必须要有逻辑严密的推理过程(不少于1000字),use thinking model。\n"
         json_output_instruction = (
             f"这张图片是{user_name}的屏幕截图。请根据屏幕内容，用你扮演的角色的口吻发表评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不要直接说“我看到屏幕上...”或“用户正在...”，不要使用「」、‘’这几个符号 ，也不要有（笑）（冷笑）等描写，而是更自然地表达，仿佛是你自己的想法，不超过120个字。\n"
-            f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，禁止接下来的回复出现与这几条回复意思十分相近的词语和句子：\n{recent_screen_logs_str}\n\nWARNING: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object, "
-            "with no other text or markdown (like ```json or ```) .with no other text or markdown (```json or ```) .with no other text or markdown ('```json' or '```'). The target JSON object must include the following keys:\n"
+            f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，禁止接下来的回复出现与这几条回复意思十分相近的词语和句子：\n{recent_screen_logs_str}\n\nattention: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object with no other text or markdown (like ```json or ```),"
+            "The target JSON object must include the following keys:\n"
             f"text: This is what you, as {pet_name}, will say to the user {user_name}. Remember, {user_name} should not be changed in any way,and use chinese in here.\n"
             f"emotion: This is your current emotion. The value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
             f"text_japanese: japanese str, Original Japanese of the content in the 'text' field.\n"
-            f"think:chinese str,The reason why you gave this reply,about 1500 character(**Do not use any symbols other than a period in this field**)\n"
+            f"think:english str,The reason why you gave this reply,about 3000 character(**Do not use any symbols other than a period in this field**)\n"
             "\nJSON output example:\n"
             "{\n"
             f'  "text": "Hello there, I am {pet_name}!",\n'
@@ -294,3 +330,91 @@ class PromptBuilder:
             f"例如：3,1,5\n"
             f"如果没有任何记忆相关，请只回复 '无'。"
         )
+
+    def build_agent_decision_prompt(
+        self, user_request: str, available_tools: List[str]
+    ) -> str:
+        tools_string_list = []
+        for tool_name in available_tools:
+            if tool_name == "open_application":
+                tools_string_list.append(
+                    f'- `open_application(app_name: str)`: 打开指定的应用程序。例如: app_name="vscode", app_name="chrome"。'
+                )
+            elif tool_name == "type_text":
+                tools_string_list.append(
+                    f"- `type_text(text: str, interval: float = 0.01)`: 输入给定的文本。`interval` 是按键之间的延迟（秒）。"
+                )
+            elif tool_name == "press_key":
+                tools_string_list.append(
+                    f"- `press_key(key_name: str, presses: int = 1, interval: float = 0.1)`: 按下一个键。`key_name` 可以是 'enter', 'ctrl+c', 'win', 'f5' 等。`presses` 是次数。`interval` 是多次按下时的延迟。"
+                )
+            elif tool_name == "click_at":
+                tools_string_list.append(
+                    f"- `click_at(x: Optional[int] = None, y: Optional[int] = None, button: str = 'left', clicks: int = 1, interval: float = 0.1)`: 点击鼠标。如果x,y为None，则在当前位置点击。`button` 可以是 'left', 'right', 'middle'。"
+                )
+            elif tool_name == "create_file_with_content":
+                tools_string_list.append(
+                    f"- `create_file_with_content(file_path: str, content: str = \"\")`: 在 `file_path` (可以是相对路径如 '~/Desktop/file.txt' 或绝对路径) 创建文件并写入 `content`。如果文件已存在则覆盖。"
+                )
+            elif tool_name == "read_file_content":
+                tools_string_list.append(
+                    f"- `read_file_content(file_path: str)`: 读取 `file_path` 处文件的内容。"
+                )
+            elif tool_name == "get_active_window_title":
+                tools_string_list.append(
+                    f"- `get_active_window_title()`: 获取当前活动窗口的标题。"
+                )
+            else:
+                tools_string_list.append(f"- `{tool_name}` (参数未知或无)")
+        tools_description = "\n".join(tools_string_list)
+        pet_name = self.config_manager.get_pet_name()
+        user_name = self.config_manager.get_user_name()
+        agent_emotions_str = self.config_manager.config.get(
+            "PET", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
+        )
+        prompt = f"""你现在是桌面助手 {pet_name} 的智能代理核心，负责理解用户 {user_name} 的指令并将其分解为一系列具体的操作步骤。
+用户请求: "{user_request}"
+你可以使用以下工具来完成用户的请求。请为每个步骤选择一个工具：
+{tools_description}
+请仔细分析用户的请求，并规划一个或多个操作步骤来完成它。
+你的输出必须是一个JSON对象，包含以下键：
+"thinking_process": (字符串) 你的总体思考过程，解释你为什么规划这些步骤。
+"text": (字符串) 一句对用户原始请求的总体确认或开始执行的提示。
+"emotion": (字符串, 可选) 你当前的情绪，从 {agent_emotions_str} 中选择一个。默认为 'neutral'。
+"steps": (列表) 一个包含所有操作步骤的列表。每个步骤都是一个JSON对象，包含：
+  "tool_to_call": (字符串) 该步骤选择调用的工具的名称。
+  "tool_arguments": (字典) 调用该工具所需的参数。如果工具不需要参数，则为空字典 {{}}。
+  "step_description": (字符串) 对这一具体步骤的简短描述（将显示给用户）。
+重要：
+- 如果一个操作自然地分为多个工具调用（例如“打开应用”然后“输入文本”），请将它们列为独立的步骤。
+- 确保工具参数的 `file_path` 使用适合目标操作系统的格式，例如Windows上可能是 'C:\\Users\\{user_name}\\Desktop\\file.txt'，macOS/Linux上可能是 '~/Desktop/file.txt'。请优先使用相对路径如 '~/Desktop/'。
+例如，如果用户说 "打开vscode并输入'你好世界'"：
+输出示例:
+{{
+  "thinking_process": "用户想先打开VSCode，然后在里面输入文本。这需要两步：第一步打开应用，第二步输入文本。",
+  "text": "好的，我来尝试打开VSCode并输入'你好世界'。",
+  "emotion": "focused",
+  "steps": [
+    {{
+      "tool_to_call": "open_application",
+      "tool_arguments": {{ "app_name": "vscode" }},
+      "step_description": "正在尝试打开 VSCode..."
+    }},
+    {{
+      "tool_to_call": "type_text",
+      "tool_arguments": {{ "text": "你好世界" }},
+      "step_description": "正在尝试输入文本 '你好世界'..."
+    }}
+  ]
+}}
+如果用户请求的操作你无法理解或没有合适的工具，或者无法分解为已知步骤：
+将 "steps" 列表设为空列表 `[]`。
+在 "thinking_process" 中说明原因。
+在 "text" 字段中给出友好的无法执行的提示。
+确保输出是严格的JSON格式，不包含任何JSON之外的文本或Markdown标记。
+现在，请处理用户请求: "{user_request}"
+"""
+        logger.info(
+            f"Agent Multi-Step Planning Prompt for '{user_request[:50]}...':\n{prompt}"
+        )
+        return prompt

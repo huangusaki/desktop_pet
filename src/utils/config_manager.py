@@ -91,6 +91,11 @@ class ConfigManager:
             "PET", "PERSONA", fallback="你是一个友好、乐于助人的桌面Bot。"
         )
 
+    def get_pet_agent_mode_emotions(self) -> str:
+        return self.config.get(
+            "PET", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
+        )
+
     def get_avatar_base_path_relative(self):
         return self.config.get(
             "AVATARS", "AVATAR_BASE_PATH", fallback="src/assets/icon"
@@ -117,10 +122,6 @@ class ConfigManager:
         return self.config.getint("MONGODB", "HISTORY_COUNT_FOR_PROMPT", fallback=5)
 
     def get_chat_dialog_display_history_count(self, default: int = 0) -> int:
-        """
-        获取聊天对话框中用于初始显示的历史记录数量。
-        如果配置中未设置，则可以依赖传入的 default 值。
-        """
         try:
             if self.config.has_option("MONGODB", "CHAT_DIALOG_DISPLAY_HISTORY_COUNT"):
                 return self.config.getint(
@@ -137,7 +138,6 @@ class ConfigManager:
         return self.config.getboolean("SCREEN_ANALYSIS", "ENABLED", fallback=False)
 
     def get_screen_analysis_task_timeout_seconds(self) -> int:
-        """获取屏幕分析任务的超时时间（秒）。"""
         return self.config.getint(
             "SCREEN_ANALYSIS", "TASK_TIMEOUT_SECONDS", fallback=60
         )
@@ -194,6 +194,23 @@ class ConfigManager:
         return self.config.get(
             "SCREEN_ANALYSIS", "PROMPT", fallback=default_prompt
         ).strip()
+
+    def get_agent_pyautogui_pause(self) -> float:
+        return self.config.getfloat("AGENT", "PYAUTOGUI_PAUSE", fallback=0.25)
+
+    def get_agent_active_window_delay_before_type(self) -> float:
+        return self.config.getfloat(
+            "AGENT", "ACTIVE_WINDOW_DELAY_BEFORE_TYPE", fallback=0.75
+        )
+
+    def get_agent_get_window_title_delay(self) -> float:
+        return self.config.getfloat("AGENT", "GET_WINDOW_TITLE_DELAY", fallback=0.3)
+
+    def get_agent_max_read_file_length(self) -> int:
+        return self.config.getint("AGENT", "MAX_READ_FILE_LENGTH", fallback=2000)
+
+    def get_agent_step_delay_seconds(self) -> float:
+        return self.config.getfloat("AGENT", "STEP_DELAY_SECONDS", fallback=0.5)
 
     def get_memory_build_distribution(self) -> tuple:
         raw_str = self.config.get(

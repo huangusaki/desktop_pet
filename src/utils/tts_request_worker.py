@@ -120,7 +120,7 @@ class TTSRequestWorker(QObject):
         )
         try:
             async with aiohttp.ClientSession() as session:
-                print(
+                logger.info(
                     f"TTSRequestWorker: Requesting TTS from {full_url} with params: {params}"
                 )
                 if not self._is_running:
@@ -134,7 +134,7 @@ class TTSRequestWorker(QObject):
                     audio_content = await response.read()
                     if not self._is_running:
                         return
-                    print(
+                    logger.info(
                         f"TTSRequestWorker: TTS audio received, size: {len(audio_content)} bytes, type: {self.tts_media_type}"
                     )
                     self.audio_ready.emit(audio_content, self.tts_media_type)

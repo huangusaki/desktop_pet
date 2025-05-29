@@ -37,6 +37,16 @@ except ImportError:
         except ImportError:
             logger.critical("CRITICAL: Could not import HippocampusManager.")
             HippocampusManager = None
+try:
+    from ..core.agent_core import AgentCore
+except ImportError:
+    try:
+        from core.agent_core import AgentCore
+    except ImportError:
+        AgentCore = None
+        logger.warning(
+            "ChatDialog: AgentCore could not be imported. Agent mode will be unavailable in chat."
+        )
 DISPLAY_AVATAR_SIZE = 28
 
 
@@ -74,6 +84,7 @@ class ChatDialog(QDialog):
         hippocampus_manager: Optional[HippocampusManager],
         pet_avatar_path: str,
         user_avatar_path: str,
+        agent_core: Optional[AgentCore] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -81,6 +92,10 @@ class ChatDialog(QDialog):
         self.mongo_handler = mongo_handler
         self.config_manager = config_manager
         self.hippocampus_manager = hippocampus_manager
+        self.agent_core = agent_core
+        self.is_agent_mode_active_chat = False
+        if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
+            self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
         self.user_name = self.config_manager.get_user_name()
         self.pet_name = self.config_manager.get_pet_name()
         self.current_role_play_character = self.pet_name
@@ -143,7 +158,6 @@ class ChatDialog(QDialog):
         transparent_pixmap = QPixmap(1, 1)
         transparent_pixmap.fill(Qt.GlobalColor.transparent)
         self.setWindowIcon(QIcon(transparent_pixmap))
-        self.setWindowTitle(f"与{self.pet_name}聊天")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         container_widget = QWidget(self)
@@ -162,9 +176,6 @@ class ChatDialog(QDialog):
         layout.addWidget(self.chat_display)
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit(self)
-        self.input_field.setPlaceholderText(
-            f"对 {self.pet_name} 说些什么... (Enter发送)"
-        )
         self.input_field.returnPressed.connect(self.send_message_handler)
         self.input_field.setStyleSheet(
             "QLineEdit { background-color:rgba(50,50,50,0.9); color:#ffffff; border:1px solid rgba(80,80,80,0.8); border-radius:6px; padding:8px; font-size:10pt;} QLineEdit:focus {border:1px solid rgba(0,120,215,0.9);}"
@@ -183,6 +194,23 @@ class ChatDialog(QDialog):
         self.async_thread: Optional[QThread] = None
         self.async_runner: Optional[AsyncRunner] = None
         self._is_closing = False
+        self._update_window_title_and_placeholder()
+
+    def set_agent_mode_active(self, active: bool):
+        self.is_agent_mode_active_chat = active
+        self._update_window_title_and_placeholder()
+
+    def _update_window_title_and_placeholder(self):
+        if self.is_agent_mode_active_chat:
+            self.setWindowTitle(f"与{self.pet_name}交互 (Agent模式)")
+            self.input_field.setPlaceholderText(
+                f"向 {self.pet_name} (Agent)下达指令... (Enter发送)"
+            )
+        else:
+            self.setWindowTitle(f"与{self.pet_name}聊天")
+            self.input_field.setPlaceholderText(
+                f"对 {self.pet_name} 说些什么... (Enter发送)"
+            )
 
     def _process_avatar_to_circular_original_res(
         self, image_path: str
@@ -276,20 +304,25 @@ class ChatDialog(QDialog):
         if not user_message:
             return
         self._add_message_to_display(self.user_name, user_message, is_user=True)
-        if self.mongo_handler and self.mongo_handler.is_connected():
-            actual_user_name = self.config_manager.get_user_name()
-            self.mongo_handler.insert_chat_message(
-                sender=actual_user_name,
-                message_text=user_message,
-                role_play_character=self.current_role_play_character,
-            )
+        if not self.is_agent_mode_active_chat:
+            if self.mongo_handler and self.mongo_handler.is_connected():
+                actual_user_name = self.config_manager.get_user_name()
+                self.mongo_handler.insert_chat_message(
+                    sender=actual_user_name,
+                    message_text=user_message,
+                    role_play_character=self.current_role_play_character,
+                )
+        else:
+            logger.info("Agent Mode: User message not saved to chat history.")
         self.input_field.clear()
         QApplication.processEvents()
         if self.async_thread and self.async_thread.isRunning():
             logger.warning("Previous async task still running. Please wait.")
             return
         current_task_thread = QThread(self)
-        self.async_runner = AsyncRunner(self._send_message_async_logic(user_message))
+        self.async_runner = AsyncRunner(
+            self._send_message_async_logic(user_message, self.is_agent_mode_active_chat)
+        )
         self.async_runner.moveToThread(current_task_thread)
         self.async_runner.task_completed.connect(self._handle_async_response)
         self.async_runner.task_failed.connect(self._handle_async_failure)
@@ -305,50 +338,95 @@ class ChatDialog(QDialog):
         self.input_field.setEnabled(False)
         self.async_thread.start()
 
-    async def _send_message_async_logic(self, user_message: str) -> Dict[str, Any]:
+    async def _send_message_async_logic(
+        self, user_message: str, is_agent_mode: bool
+    ) -> Dict[str, Any]:
         try:
-            response_data = await asyncio.wait_for(
-                self.gemini_client.send_message(
-                    message_text=user_message,
-                    hippocampus_manager=self.hippocampus_manager,
-                ),
-                timeout=90.0,
-            )
-            return response_data
+            if is_agent_mode:
+                if self.agent_core:
+                    logger.info(
+                        f"Agent Mode: Processing user request: {user_message[:50]}..."
+                    )
+                    response_data = await asyncio.wait_for(
+                        self.agent_core.process_user_request(user_message),
+                        timeout=120.0,
+                    )
+                    response_data.setdefault("text", "Agent action processed.")
+                    response_data.setdefault("emotion", "neutral")
+                    return response_data
+                else:
+                    logger.error("Agent mode active but AgentCore is not available.")
+                    return {
+                        "text": "错误: Agent核心未加载，无法执行指令。",
+                        "emotion": "sad",
+                        "is_error": True,
+                    }
+            else:
+                response_data = await asyncio.wait_for(
+                    self.gemini_client.send_message(
+                        message_text=user_message,
+                        hippocampus_manager=self.hippocampus_manager,
+                        is_agent_mode=False,
+                    ),
+                    timeout=90.0,
+                )
+                return response_data
         except asyncio.TimeoutError:
-            logger.warning(
-                f"Gemini API call timed out for message: {user_message[:50]}..."
-            )
+            mode_str = "Agent指令" if is_agent_mode else "Gemini API调用"
+            logger.warning(f"{mode_str} timed out for message: {user_message[:50]}...")
             return {
-                "text": f"呜，{self.pet_name}思考的时间好像太久了……",
+                "text": f"呜，{self.pet_name}思考的时间好像太久了…… ({mode_str}超时)",
                 "emotion": "default",
+                "is_error": True,
             }
         except Exception as e:
-            logger.error(f"Error in _send_message_async_logic: {e}", exc_info=True)
+            logger.error(
+                f"Error in _send_message_async_logic (agent_mode={is_agent_mode}): {e}",
+                exc_info=True,
+            )
             return {
                 "text": f"好像有个报错: {str(e)}",
                 "emotion": "default",
-                "is_error": True
+                "is_error": True,
             }
 
     def _handle_async_response(self, response_data: Dict[str, Any]):
         current_runner = self.async_runner
         current_thread = current_runner.thread() if current_runner else None
-        pet_text = response_data.get("text", "我好像不知道该说什么了...")
-        pet_emotion = response_data.get("emotion", "default")
-        text_japanese = response_data.get("text_japanese")
         is_error_response = response_data.get("is_error", False)
-        if text_japanese and text_japanese.strip():
-            self.chat_text_for_tts_ready.emit(text_japanese)
-        if not is_error_response: 
-            if self.mongo_handler and self.mongo_handler.is_connected():
-                actual_pet_name = self.config_manager.get_pet_name()
-                self.mongo_handler.insert_chat_message(
-                    sender=actual_pet_name,
-                    message_text=pet_text,
-                    role_play_character=self.current_role_play_character,
-                )
-        self.speech_and_emotion_received.emit(pet_text, pet_emotion)
+        if self.is_agent_mode_active_chat:
+            pet_text = response_data.get("text", "Agent action completed.")
+            pet_emotion = response_data.get("emotion", "neutral")
+            action_summary = response_data.get("action_summary", "")
+            action_performed = response_data.get("action_performed", False)
+            tool_result = response_data.get("tool_result")
+            if action_summary:
+                pet_text += f"\n[Agent思考: {action_summary}]"
+            if tool_result and isinstance(tool_result, dict):
+                if tool_result.get("success") is False and tool_result.get("error"):
+                    pet_text += f"\n[工具执行错误: {tool_result.get('error')}]"
+                elif tool_result.get("message"):
+                    pet_text += f"\n[工具消息: {tool_result.get('message')}]"
+                if tool_result.get("content"):
+                    pet_text += (
+                        f"\n[文件内容预览 (部分)]:\n{tool_result.get('content')}"
+                    )
+            self.speech_and_emotion_received.emit(pet_text, pet_emotion)
+        else:
+            pet_text = response_data.get("text", "我好像不知道该说什么了...")
+            pet_emotion = response_data.get("emotion", "default")
+            text_japanese = response_data.get("text_japanese")
+            if text_japanese and text_japanese.strip():
+                self.chat_text_for_tts_ready.emit(text_japanese)
+            if not is_error_response:
+                if self.mongo_handler and self.mongo_handler.is_connected():
+                    actual_pet_name = self.config_manager.get_pet_name()
+                    self.mongo_handler.insert_chat_message(
+                        sender=actual_pet_name,
+                        message_text=pet_text,
+                        role_play_character=self.current_role_play_character,
+                    )
+            self.speech_and_emotion_received.emit(pet_text, pet_emotion)
         if self._is_closing:
             logger.info(
                 "Dialog is closing. Skipping internal UI updates for this response."
@@ -357,7 +435,7 @@ class ChatDialog(QDialog):
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
             self.input_field.setFocus()
-            self._add_message_to_display(self.pet_name, pet_text, is_user=False) 
+            self._add_message_to_display(self.pet_name, pet_text, is_user=False)
         if current_thread and current_thread.isRunning():
             current_thread.quit()
         self._cleanup_async_resources()
@@ -365,8 +443,9 @@ class ChatDialog(QDialog):
     def _handle_async_failure(self, error_message: str):
         current_runner = self.async_runner
         current_thread = current_runner.thread() if current_runner else None
+        error_emotion = "neutral" if self.is_agent_mode_active_chat else "sad"
         self.speech_and_emotion_received.emit(
-            f"呜，我好像出错了... ({error_message[:30]})", "sad"
+            f"呜，我好像出错了... ({error_message[:30]})", error_emotion
         )
         if self._is_closing:
             logger.info(
@@ -443,19 +522,26 @@ class ChatDialog(QDialog):
     def open_dialog(self):
         self._is_closing = False
         self.chat_display.clear()
-        history_for_display = self._get_raw_chat_history_for_display()
-        if history_for_display:
-            for msg_data in history_for_display:
-                sender_from_db = msg_data.get("sender", "")
-                is_user_msg = sender_from_db == self.user_name
-                self._add_message_to_display(
-                    sender_name_for_log_only=sender_from_db,
-                    message=msg_data.get("message_text", ""),
-                    is_user=is_user_msg,
-                )
+        if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
+            self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
+        self._update_window_title_and_placeholder()
+        if self.is_agent_mode_active_chat:
+            agent_welcome_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>Agent模式已激活。输入指令进行交互。\nAgent交互不会被保存到聊天记录。</i></div>"
+            self.chat_display.setHtml(agent_welcome_html)
         else:
-            no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
-            self.chat_display.setHtml(no_history_html)
+            history_for_display = self._get_raw_chat_history_for_display()
+            if history_for_display:
+                for msg_data in history_for_display:
+                    sender_from_db = msg_data.get("sender", "")
+                    is_user_msg = sender_from_db == self.user_name
+                    self._add_message_to_display(
+                        sender_name_for_log_only=sender_from_db,
+                        message=msg_data.get("message_text", ""),
+                        is_user=is_user_msg,
+                    )
+            else:
+                no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
+                self.chat_display.setHtml(no_history_html)
         self.input_field.clear()
         self.send_button.setEnabled(True)
         self.input_field.setEnabled(True)
