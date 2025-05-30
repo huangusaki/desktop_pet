@@ -176,7 +176,7 @@ class ScreenAnalysisWorker(QObject):
 
 
 class ScreenAnalyzer(QObject):
-    pet_reaction_ready = pyqtSignal(str, str)
+    pet_reaction_ready = pyqtSignal(str, str, str)
     ready_for_worker_grab = pyqtSignal()
 
     def __init__(
@@ -362,7 +362,8 @@ class ScreenAnalyzer(QObject):
         text_chinese = response_data.get("text", "Hmm...")
         emotion = response_data.get("emotion", "default")
         text_japanese = response_data.get("text_japanese")
-        self.pet_reaction_ready.emit(text_chinese, emotion)
+        image_description_str = response_data.get("image_description", "")
+        self.pet_reaction_ready.emit(text_chinese, emotion, image_description_str)
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.quit()
         else:

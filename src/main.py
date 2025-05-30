@@ -658,55 +658,59 @@ def open_chat_dialog_handler():
             chat_dialog_global.raise_()
 
 
-def handle_screen_analysis_reaction(text: str, emotion: str):
+def handle_screen_analysis_reaction(text: str, emotion: str, image_description: str):
     global pet_window_global, chat_dialog_global, mongo_handler_global, config_manager_global
+    pet_name = config_manager_global.get_pet_name() if config_manager_global else "Bot"
+    user_name = (
+        config_manager_global.get_user_name() if config_manager_global else "User"
+    )
+    description_part = ""
+    if image_description and image_description.strip():
+        description_part = f"，发现里面的内容是：“{image_description.strip()}”"
+    full_text_for_pet = (
+        f"（{pet_name}看了一眼{user_name}的屏幕{description_part}）{text}"
+    )
     if pet_window_global:
         pet_window_global.update_speech_and_emotion(text, emotion)
     if chat_dialog_global and not chat_dialog_global.isHidden():
         if not chat_dialog_global.is_agent_mode_active_chat:
-            pet_name = (
-                config_manager_global.get_pet_name() if config_manager_global else "Bot"
-            )
-            display_text = f"{text}"
             chat_dialog_global._add_message_to_display(
-                sender_name_for_log_only=pet_name, message=display_text, is_user=False
+                sender_name_for_log_only=pet_name, message=text, is_user=False
             )
     if (
         mongo_handler_global
         and mongo_handler_global.is_connected()
         and config_manager_global
     ):
-        user_name = config_manager_global.get_user_name()
-        pet_name = config_manager_global.get_pet_name()
-        db_text = f"（{pet_name}看了一眼{user_name}的屏幕）{text}"
+        db_text_to_store = full_text_for_pet
         save_to_chat_history = (
             config_manager_global.get_screen_analysis_save_to_chat_history()
         )
         if save_to_chat_history:
             mongo_handler_global.insert_chat_message(
                 sender=pet_name,
-                message_text=db_text,
+                message_text=db_text_to_store,
                 role_play_character=pet_name,
             )
-            logger.debug(f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录。")
+            logger.debug(f"Main: 屏幕反应 ('{db_text_to_store}') 已保存到主聊天记录。")
         else:
             if hasattr(mongo_handler_global, "insert_screen_analysis_log_entry"):
                 mongo_handler_global.insert_screen_analysis_log_entry(
                     sender=pet_name,
-                    message_text=db_text,
+                    message_text=db_text_to_store,
                     role_play_character=pet_name,
                 )
                 logger.debug(
-                    f"Main: 屏幕反应 ('{text}') 已保存到 screen_analysis_log 表。"
+                    f"Main: 屏幕反应 ('{db_text_to_store}') 已保存到 screen_analysis_log 表。"
                 )
             else:
                 mongo_handler_global.insert_chat_message(
                     sender=pet_name,
-                    message_text=f"[Screen Log] {db_text}",
+                    message_text=f"[Screen Log] {db_text_to_store}",
                     role_play_character=pet_name,
                 )
                 logger.debug(
-                    f"Main: 屏幕反应 ('{text}') 已保存到主聊天记录 (fallback)."
+                    f"Main: 屏幕反应 ('{db_text_to_store}') 已保存到主聊天记录 (fallback)."
                 )
     elif not config_manager_global:
         logger.warning("Main: ConfigManager 未初始化，无法保存屏幕反应。")
