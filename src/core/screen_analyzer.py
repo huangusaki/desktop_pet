@@ -342,7 +342,7 @@ class ScreenAnalyzer(QObject):
         if self.pet_window:
             self._pet_was_visible_before_grab = self.pet_window.isVisible()
             if self._pet_was_visible_before_grab:
-                self.pet_window.setWindowOpacity(0.50)
+                self.pet_window.setWindowOpacity(0.05)
                 QApplication.processEvents()
         self.ready_for_worker_grab.emit()
 
