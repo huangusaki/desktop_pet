@@ -7,6 +7,9 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 from typing import Literal, List, Dict, Any, Optional
 import logging
+import asyncio
+import os
+import functools
 from ..utils.prompt_builder import PromptBuilder
 from ..utils.config_manager import ConfigManager
 
@@ -105,8 +108,9 @@ class GeminiClient:
         self,
         new_user_message_text: str,
         hippocampus_manager: Optional[HippocampusManager],
-    ) -> List[str]:
-        unified_prompt = await self.prompt_builder.build_unified_chat_prompt_string(
+        is_multimodal_request: bool = False,
+    ) -> List[Any]:
+        unified_prompt_str = await self.prompt_builder.build_unified_chat_prompt_string(
             new_user_message_text=new_user_message_text,
             pet_name=self.pet_name,
             user_name=self.user_name,
@@ -115,8 +119,25 @@ class GeminiClient:
             unified_default_emotion=self.unified_default_emotion,
             mongo_handler=self.mongo_handler,
             hippocampus_manager=hippocampus_manager,
+            is_multimodal_request=is_multimodal_request,
         )
-        return [unified_prompt]
+        if isinstance(unified_prompt_str, str):
+            return [types.Part(text=unified_prompt_str)]
+        elif isinstance(unified_prompt_str, list) and all(
+            isinstance(p, types.Part) for p in unified_prompt_str
+        ):
+            return unified_prompt_str
+        elif isinstance(unified_prompt_str, types.Part):
+            return [unified_prompt_str]
+        else:
+            if (
+                isinstance(unified_prompt_str, list)
+                and unified_prompt_str
+                and isinstance(unified_prompt_str[0], str)
+            ):
+                return [types.Part(text=unified_prompt_str[0])]
+            else:
+                return [types.Part(text=str(unified_prompt_str))]
 
     async def send_message(
         self,
@@ -128,15 +149,17 @@ class GeminiClient:
         try:
             if not self.client:
                 raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
+            chat_contents: List[Any]
             if is_agent_mode:
-                chat_contents = [message_text]
-                logger.info("GeminiClient: Sending Agent Mode prompt directly.")
+                chat_contents = [types.Part(text=message_text)]
+                logger.info("GeminiClient: Sending Agent Mode prompt directly as Part.")
             else:
                 chat_contents = await self._build_chat_contents_for_api(
                     new_user_message_text=message_text,
                     hippocampus_manager=hippocampus_manager,
+                    is_multimodal_request=False,
                 )
-            if not chat_contents or not chat_contents[0]:
+            if not chat_contents or not getattr(chat_contents[0], "text", None):
                 error_msg = "无法构建有效的统一提示字符串以供API调用。"
                 logger.error(f"GeminiClient: 错误 - {error_msg}. 内容: {chat_contents}")
                 return {
@@ -147,12 +170,9 @@ class GeminiClient:
                 }
             generation_config_args = {
                 "temperature": 0.6 if is_agent_mode else 0.78,
-                "tools": (
-                    self.enabled_tools
-                    if not is_agent_mode and self.enabled_tools
-                    else None
-                ),
             }
+            if self.enabled_tools and not is_agent_mode:
+                generation_config_args["tools"] = self.enabled_tools
             if (
                 not is_agent_mode
                 and self.thinking_budget is not None
@@ -233,7 +253,7 @@ class GeminiClient:
             image_part_obj = types.Part(
                 inline_data=types.Blob(data=image_bytes, mime_type=mime_type)
             )
-            screen_analysis_text_prompt = (
+            screen_analysis_text_prompt_str = (
                 self.prompt_builder.build_screen_analysis_prompt(
                     pet_name=self.pet_name,
                     user_name=self.user_name,
@@ -242,15 +262,12 @@ class GeminiClient:
                     unified_default_emotion=self.unified_default_emotion,
                 )
             )
-            user_parts_for_vision = [types.Part(text=screen_analysis_text_prompt)]
+            user_parts_for_vision = [types.Part(text=screen_analysis_text_prompt_str)]
             if prompt_text and prompt_text.strip():
                 user_parts_for_vision.append(
                     types.Part(text=f"\n用户补充说明：{prompt_text}")
                 )
             user_parts_for_vision.append(image_part_obj)
-            contents_for_vision = [
-                types.Content(role="user", parts=user_parts_for_vision)
-            ]
             vision_config_args = {"temperature": 0.78}
             if self.enabled_tools:
                 vision_config_args["tools"] = self.enabled_tools
@@ -265,7 +282,7 @@ class GeminiClient:
             )
             response_object = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=contents_for_vision,
+                contents=user_parts_for_vision,
                 config=api_vision_config,
             )
             logger.info(
@@ -309,6 +326,144 @@ class GeminiClient:
             logger.error(f"Error in send_message_with_image: {e}", exc_info=True)
             return self._handle_general_exception(
                 e, "send_message_with_image", response_object
+            )
+
+    async def send_multimodal_message_async(
+        self,
+        text_prompt: str,
+        media_files: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        response_object = None
+        try:
+            if not self.client:
+                raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
+            text_parts = await self._build_chat_contents_for_api(
+                new_user_message_text=text_prompt,
+                hippocampus_manager=None,
+                is_multimodal_request=True,
+            )
+            api_contents: List[Any] = list(text_parts)
+            if text_parts and hasattr(text_parts[0], "text"):
+                logger.info(
+                    f"Multimodal Request - Text Prompt Part: {text_parts[0].text[:200]}..."
+                )
+            else:
+                logger.info(
+                    f"Multimodal Request - Text Prompt Part appears empty or not a Part: {text_parts}"
+                )
+            uploaded_file_uris_for_log = []
+            if media_files:
+                loop = asyncio.get_running_loop()
+                for file_info in media_files:
+                    file_path = file_info["path"]
+                    display_name_for_log = file_info.get(
+                        "display_name", os.path.basename(file_path)
+                    )
+                    logger.info(
+                        f"Uploading file for multimodal message: {display_name_for_log} from {file_path}"
+                    )
+                    try:
+                        upload_func_with_args = functools.partial(
+                            self.client.files.upload, file=file_path
+                        )
+                        uploaded_file_object = await loop.run_in_executor(
+                            None, upload_func_with_args
+                        )
+                        api_contents.append(uploaded_file_object)
+                        uploaded_file_uris_for_log.append(uploaded_file_object.uri)
+                        logger.info(
+                            f"Successfully uploaded {display_name_for_log}, URI: {uploaded_file_object.uri}"
+                        )
+                    except Exception as e_upload:
+                        logger.error(
+                            f"Failed to upload file {display_name_for_log}: {e_upload}",
+                            exc_info=True,
+                        )
+                        return self._handle_general_exception(
+                            e_upload,
+                            f"multimodal file upload ({display_name_for_log})",
+                            is_agent_mode=False,
+                        )
+            if not api_contents or not any(
+                (hasattr(p, "text") and p.text.strip()) or isinstance(p, types.File)
+                for p in api_contents
+                if p is not None
+            ):
+                logger.warning("Multimodal - No valid content (text or files) to send.")
+                return self._handle_empty_or_unparseable_response(
+                    None, "Multimodal - No content to send"
+                )
+            multimodal_config_args = {"temperature": 0.78}
+            if self.enabled_tools:
+                multimodal_config_args["tools"] = self.enabled_tools
+            if self.thinking_budget is not None and self.thinking_budget > 0:
+                multimodal_config_args["thinking_config"] = types.ThinkingConfig(
+                    thinking_budget=self.thinking_budget, include_thoughts=True
+                )
+            api_multimodal_config = (
+                types.GenerateContentConfig(**multimodal_config_args)
+                if multimodal_config_args
+                else None
+            )
+            logger.info(
+                f"Sending multimodal request with {len(api_contents)} parts to LLM. Config: {api_multimodal_config}"
+            )
+            response_object = await self.client.aio.models.generate_content(
+                model=self.model_name,
+                contents=api_contents,
+                config=api_multimodal_config,
+            )
+            logger.info(
+                f"GeminiClient: 原始LLM响应 (send_multimodal_message_async): {str(response_object)}"
+            )
+            llm_output_text = None
+            if hasattr(response_object, "text") and response_object.text:
+                llm_output_text = response_object.text
+            elif hasattr(response_object, "candidates") and response_object.candidates:
+                candidate = response_object.candidates[0]
+                if (
+                    hasattr(candidate, "content")
+                    and candidate.content
+                    and hasattr(candidate.content, "parts")
+                ):
+                    full_text_parts = []
+                    for part_item in candidate.content.parts:
+                        current_part_text = getattr(part_item, "text", None)
+                        if (
+                            hasattr(part_item, "thought")
+                            and part_item.thought
+                            and current_part_text
+                        ):
+                            logger.info(
+                                f"LLM思考摘要 (part): {current_part_text.strip()}"
+                            )
+                        elif current_part_text:
+                            full_text_parts.append(current_part_text)
+                    if full_text_parts:
+                        llm_output_text = "".join(full_text_parts)
+            if llm_output_text is not None:
+                parsed_result = self._parse_llm_json_output(
+                    llm_output_text.strip(), response_object, is_agent_mode=False
+                )
+                if uploaded_file_uris_for_log:
+                    thinking_prefix = (
+                        "<think>Uploaded files: "
+                        + ", ".join(uploaded_file_uris_for_log)
+                        + "</think> "
+                    )
+                    parsed_result["thinking_process"] = thinking_prefix + (
+                        parsed_result.get("thinking_process", "") or ""
+                    )
+                return parsed_result
+            else:
+                logger.warning("GeminiClient: 未能从LLM多模态响应中提取主要文本。")
+                return self._handle_empty_or_unparseable_response(
+                    response_object, "多模态 - 未找到主要文本"
+                )
+        except Exception as e:
+            logger.error(f"Error in send_multimodal_message_async: {e}", exc_info=True)
+            return self._handle_general_exception(
+                e, "send_multimodal_message_async", response_object
             )
 
     def _parse_llm_json_output(
@@ -689,6 +844,9 @@ class GeminiClient:
                     f"Candidate[{i}]:FinishReason={finish_reason_str},SafetyRatings=[{','.join(cand_safety_info)}]"
                 )
         if not all_feedback_parts:
+            error_attr = getattr(response_obj, "_error", None)
+            if error_attr:
+                return f"提示反馈: (错误对象: {str(error_attr)[:100]})"
             return "提示反馈: (在response_obj中未找到特定的反馈属性)"
         return "; ".join(all_feedback_parts)
 
@@ -703,14 +861,19 @@ class GeminiClient:
         details_from_exception = str(e)
         thinking_on_error = f"<think>{context} 中发生一般性异常: {type(e).__name__} - {details_from_exception}."
         feedback_str = ""
-        if raw_response_object:
-            feedback_str = self._get_prompt_feedback_info(raw_response_object)
-        elif hasattr(e, "response") and e.response:
+        if hasattr(e, "response") and e.response:
             feedback_str = self._get_prompt_feedback_info(getattr(e, "response", None))
-        if feedback_str and feedback_str not in [
-            "提示反馈: (在response_obj中未找到特定的反馈属性)",
-            "提示反馈: (无响应对象)",
-        ]:
+        elif raw_response_object:
+            feedback_str = self._get_prompt_feedback_info(raw_response_object)
+        if (
+            feedback_str
+            and feedback_str
+            not in [
+                "提示反馈: (在response_obj中未找到特定的反馈属性)",
+                "提示反馈: (无响应对象)",
+            ]
+            and "错误对象" not in feedback_str
+        ):
             thinking_on_error += f" 反馈: {feedback_str}"
             if "BlockReason=" in feedback_str:
                 match = re.search(r"BlockReason=([^,;]+)", feedback_str)
@@ -720,6 +883,7 @@ class GeminiClient:
                     "STOP",
                     "N/A",
                     "",
+                    "OTHER",
                 ]:
                     error_message = f"抱歉，我的回复 ({context}) 似乎被系统拦截了 (原因: {match.group(1).strip()})."
             elif "FinishReason=" in feedback_str:

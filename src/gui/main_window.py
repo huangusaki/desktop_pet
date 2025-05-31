@@ -24,10 +24,10 @@ class PetWindow(QWidget):
         initial_image_path: str,
         assets_base_path: str,
         available_emotions: List[str],
-        config_manager: Any,
-        agent_core: Optional[Any] = None,
+        app_context: Any,
     ):
         super().__init__()
+        self.app_context = app_context
         self._drag_pos = QPoint()
         self._is_dragging = False
         self.assets_base_path = assets_base_path
@@ -39,8 +39,8 @@ class PetWindow(QWidget):
             available_emotions if available_emotions else ["default"]
         )
         self.pet_size_preference = "medium"
-        self.config_manager = config_manager
-        self.agent_core = agent_core
+        self.config_manager = self.app_context.config_manager
+        self.agent_core = self.app_context.agent_core
         self.is_agent_mode_active_internal = False
         if self.agent_core:
             if hasattr(self.agent_core, "is_agent_mode_active"):

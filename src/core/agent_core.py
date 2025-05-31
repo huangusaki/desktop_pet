@@ -35,7 +35,9 @@ class AgentCore:
         else:
             pass
 
-    async def process_user_request(self, user_request: str) -> Dict[str, Any]:
+    async def process_user_request(
+        self, user_request: str, media_files: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         if not self.is_agent_mode_active:
             return {
                 "text": "Agent模式未激活，无法执行操作。",
@@ -44,7 +46,7 @@ class AgentCore:
             }
         try:
             agent_prompt = self.prompt_builder.build_agent_decision_prompt(
-                user_request, list(self.tools.keys())
+                user_request, list(self.tools.keys()), media_files=media_files
             )
             logger.info(
                 f"AgentCore: Sending to LLM for multi-step plan: {agent_prompt[:200]}..."

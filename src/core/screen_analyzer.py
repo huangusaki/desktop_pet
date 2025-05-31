@@ -259,7 +259,7 @@ class ScreenAnalyzer(QObject):
 
     def stop_monitoring(self):
         self.timer.stop()
-        logger.info("Attempting to stop monitoring and clean up threads...")
+        logger.info("准备关闭屏幕监控线程...")
         if self.analysis_thread and self.analysis_thread.isRunning():
             if self.analysis_worker:
                 self.analysis_worker.stop()
@@ -282,7 +282,7 @@ class ScreenAnalyzer(QObject):
         self._cleanup_tts_request_thread_and_worker()
         self.tts_queue.clear()
         self.is_tts_processing = False
-        logger.info("Monitoring stopped, TTS queue cleared, and cleanup attempted.")
+        logger.info("屏幕监控线程关闭, TTS队列已清理")
 
     def _check_and_analyze_wrapper(self):
         if not self._is_enabled:

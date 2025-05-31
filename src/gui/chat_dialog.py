@@ -9,13 +9,19 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QApplication,
     QWidget,
+    QFileDialog,
+    QLabel,
+    QSizePolicy,
+    QScrollArea,
+    QFrame,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QThread, QObject
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QThread, QObject, QSize
+from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices
 import asyncio
 import sys
 from typing import Optional, List, Any, Dict
 import logging
+import mimetypes
 
 logger = logging.getLogger("ChatDialog")
 try:
@@ -48,6 +54,7 @@ except ImportError:
             "ChatDialog: AgentCore could not be imported. Agent mode will be unavailable in chat."
         )
 DISPLAY_AVATAR_SIZE = 28
+STAGED_FILE_THUMBNAIL_SIZE = 64
 
 
 class AsyncRunner(QObject):
@@ -78,21 +85,18 @@ class ChatDialog(QDialog):
 
     def __init__(
         self,
-        gemini_client: Any,
-        mongo_handler: Any,
-        config_manager: Any,
-        hippocampus_manager: Optional[HippocampusManager],
+        application_context: Any,
         pet_avatar_path: str,
         user_avatar_path: str,
-        agent_core: Optional[AgentCore] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self.gemini_client = gemini_client
-        self.mongo_handler = mongo_handler
-        self.config_manager = config_manager
-        self.hippocampus_manager = hippocampus_manager
-        self.agent_core = agent_core
+        self.context = application_context
+        self.gemini_client = self.context.gemini_client
+        self.mongo_handler = self.context.mongo_handler
+        self.config_manager = self.context.config_manager
+        self.hippocampus_manager = self.context.hippocampus_manager
+        self.agent_core = self.context.agent_core
         self.is_agent_mode_active_chat = False
         if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
             self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
@@ -164,6 +168,24 @@ class ChatDialog(QDialog):
         container_widget.setObjectName("ChatContainer")
         layout = QVBoxLayout(container_widget)
         layout.setContentsMargins(15, 15, 15, 15)
+        self.staged_files_scroll_area = QScrollArea(self)
+        self.staged_files_scroll_area.setWidgetResizable(True)
+        self.staged_files_scroll_area.setFixedHeight(STAGED_FILE_THUMBNAIL_SIZE + 20)
+        self.staged_files_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.staged_files_scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.staged_files_widget = QWidget()
+        self.staged_files_layout = QHBoxLayout(self.staged_files_widget)
+        self.staged_files_layout.setContentsMargins(5, 5, 5, 5)
+        self.staged_files_layout.setSpacing(10)
+        self.staged_files_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.staged_files_widget.setLayout(self.staged_files_layout)
+        self.staged_files_scroll_area.setWidget(self.staged_files_widget)
+        self.staged_files_scroll_area.setVisible(False)
+        layout.addWidget(self.staged_files_scroll_area)
         self.chat_display = QTextBrowser(self)
         self.chat_display.setReadOnly(True)
         self.chat_display.setOpenExternalLinks(False)
@@ -174,26 +196,36 @@ class ChatDialog(QDialog):
             "QTextBrowser { background-color:transparent; color:#e0e0e0; border:none; padding:8px; font-size:10pt; }"
         )
         layout.addWidget(self.chat_display)
-        input_layout = QHBoxLayout()
+        input_area_layout = QHBoxLayout()
         self.input_field = QLineEdit(self)
         self.input_field.returnPressed.connect(self.send_message_handler)
         self.input_field.setStyleSheet(
             "QLineEdit { background-color:rgba(50,50,50,0.9); color:#ffffff; border:1px solid rgba(80,80,80,0.8); border-radius:6px; padding:8px; font-size:10pt;} QLineEdit:focus {border:1px solid rgba(0,120,215,0.9);}"
         )
-        input_layout.addWidget(self.input_field)
+        input_area_layout.addWidget(self.input_field)
+        self.attach_button = QPushButton(self)
+        self.attach_button.setText("📎")
+        self.attach_button.setToolTip("添加附件")
+        self.attach_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.attach_button.setStyleSheet(
+            "QPushButton { background-color:rgba(70,70,70,0.9); color:white; border:none; border-radius:6px; padding:8px; font-size:10pt;} QPushButton:hover{background-color:rgba(90,90,90,0.9);}"
+        )
+        self.attach_button.clicked.connect(self._handle_attach_file_dialog)
+        input_area_layout.addWidget(self.attach_button)
+        layout.addLayout(input_area_layout)
         self.send_button = QPushButton("发送", self)
         self.send_button.clicked.connect(self.send_message_handler)
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_button.setStyleSheet(
             "QPushButton { background-color:#0078FF; color:white; border:none; border-radius:6px; padding:8px 15px; font-size:10pt; font-weight:bold; } QPushButton:hover{background-color:#005a9e;} QPushButton:pressed{background-color:#003c6a;}"
         )
-        input_layout.addWidget(self.send_button)
-        layout.addLayout(input_layout)
+        layout.addWidget(self.send_button)
         main_layout.addWidget(container_widget)
         self.setLayout(main_layout)
         self.async_thread: Optional[QThread] = None
         self.async_runner: Optional[AsyncRunner] = None
         self._is_closing = False
+        self.staged_files: List[Dict[str, Any]] = []
         self._update_window_title_and_placeholder()
 
     def set_agent_mode_active(self, active: bool):
@@ -209,7 +241,7 @@ class ChatDialog(QDialog):
         else:
             self.setWindowTitle(f"与{self.pet_name}聊天")
             self.input_field.setPlaceholderText(
-                f"对 {self.pet_name} 说些什么... (Enter发送)"
+                f"对{self.pet_name}说些什么... (Enter发送)"
             )
 
     def _process_avatar_to_circular_original_res(
@@ -298,30 +330,158 @@ class ChatDialog(QDialog):
             if not self.input_field.isEnabled():
                 self.input_field.setEnabled(True)
                 self.input_field.setFocus()
+            if not self.attach_button.isEnabled():
+                self.attach_button.setEnabled(True)
+
+    def _handle_attach_file_dialog(self):
+        file_filter = "媒体文件 (*.png *.jpg *.jpeg *.gif *.webp *.mp3 *.wav *.m4a *.ogg);;所有文件 (*)"
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择要附加的文件", "", file_filter
+        )
+        if file_paths:
+            for file_path in file_paths:
+                if not os.path.exists(file_path):
+                    logger.warning(f"选择的文件路径不存在: {file_path}")
+                    continue
+                file_info = {
+                    "path": file_path,
+                    "display_name": os.path.basename(file_path),
+                    "mime_type": mimetypes.guess_type(file_path)[0]
+                    or "application/octet-stream",
+                    "widget": None,
+                }
+                if any(f["path"] == file_path for f in self.staged_files):
+                    logger.info(f"文件 {file_path} 已在暂存区。")
+                    continue
+                self.staged_files.append(file_info)
+            self._update_staged_files_ui()
+
+    def _update_staged_files_ui(self):
+        while self.staged_files_layout.count():
+            child = self.staged_files_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        if not self.staged_files:
+            self.staged_files_scroll_area.setVisible(False)
+            return
+        for file_info in self.staged_files:
+            file_widget = QWidget()
+            file_layout = QHBoxLayout(file_widget)
+            file_layout.setContentsMargins(0, 0, 0, 0)
+            file_layout.setSpacing(5)
+            thumb_label = QLabel()
+            thumb_label.setFixedSize(
+                STAGED_FILE_THUMBNAIL_SIZE, STAGED_FILE_THUMBNAIL_SIZE
+            )
+            thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb_label.setStyleSheet(
+                "border: 1px solid #555; border-radius: 4px; background-color: #333;"
+            )
+            pixmap = QPixmap(file_info["path"])
+            if not pixmap.isNull() and file_info["mime_type"].startswith("image/"):
+                thumb_label.setPixmap(
+                    pixmap.scaled(
+                        STAGED_FILE_THUMBNAIL_SIZE,
+                        STAGED_FILE_THUMBNAIL_SIZE,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            else:
+                thumb_label.setText(
+                    file_info["mime_type"].split("/")[0][:3].upper()
+                    if "/" in file_info["mime_type"]
+                    else "FILE"
+                )
+                thumb_label.setStyleSheet(
+                    thumb_label.styleSheet() + "color: #ccc; font-weight: bold;"
+                )
+            file_layout.addWidget(thumb_label)
+            remove_button = QPushButton("X")
+            remove_button.setFixedSize(20, 20)
+            remove_button.setToolTip(f"移除 {file_info['display_name']}")
+            remove_button.setStyleSheet(
+                "QPushButton { background-color: #550000; color: white; border-radius: 10px; font-weight: bold;} QPushButton:hover { background-color: #880000; }"
+            )
+            remove_button.clicked.connect(
+                lambda checked=False, fi=file_info: self._remove_staged_file(fi)
+            )
+            thumb_and_remove_layout = QVBoxLayout()
+            thumb_and_remove_layout.setContentsMargins(0, 0, 0, 0)
+            thumb_and_remove_layout.setSpacing(2)
+            top_bar_layout = QHBoxLayout()
+            top_bar_layout.addStretch()
+            top_bar_layout.addWidget(remove_button)
+            top_bar_layout.setContentsMargins(0, 0, 0, 0)
+            simple_item_widget = QFrame()
+            simple_item_layout = QVBoxLayout(simple_item_widget)
+            simple_item_layout.setContentsMargins(0, 0, 0, 0)
+            simple_item_layout.setSpacing(1)
+            button_container = QWidget()
+            button_layout = QHBoxLayout(button_container)
+            button_layout.setContentsMargins(0, 0, 0, 0)
+            button_layout.addStretch()
+            button_layout.addWidget(remove_button)
+            simple_item_layout.addWidget(button_container)
+            simple_item_layout.addWidget(thumb_label)
+            name_label = QLabel(file_info["display_name"])
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setFixedWidth(STAGED_FILE_THUMBNAIL_SIZE)
+            name_label.setWordWrap(True)
+            name_label.setStyleSheet("font-size: 7pt; color: #bbb;")
+            fm = name_label.fontMetrics()
+            max_name_height = fm.height() * 2 + fm.leading()
+            name_label.setMaximumHeight(max_name_height)
+            simple_item_layout.addWidget(name_label)
+            simple_item_widget.setFixedWidth(STAGED_FILE_THUMBNAIL_SIZE + 10)
+            file_info["widget"] = simple_item_widget
+            self.staged_files_layout.addWidget(simple_item_widget)
+        self.staged_files_scroll_area.setVisible(True)
+        self.staged_files_widget.adjustSize()
+
+    def _remove_staged_file(self, file_info_to_remove: Dict[str, Any]):
+        self.staged_files = [
+            fi for fi in self.staged_files if fi["path"] != file_info_to_remove["path"]
+        ]
+        self._update_staged_files_ui()
 
     def send_message_handler(self):
         user_message = self.input_field.text().strip()
-        if not user_message:
+        if not user_message and not self.staged_files:
             return
-        self._add_message_to_display(self.user_name, user_message, is_user=True)
-        if not self.is_agent_mode_active_chat:
+        if user_message or self.staged_files:
+            self._add_message_to_display(
+                self.user_name,
+                user_message if user_message else "(发送文件)",
+                is_user=True,
+            )
+        if not self.is_agent_mode_active_chat and user_message:
             if self.mongo_handler and self.mongo_handler.is_connected():
                 actual_user_name = self.config_manager.get_user_name()
+                message_to_save = user_message
+                if self.staged_files:
+                    filenames = [f["display_name"] for f in self.staged_files]
+                    message_to_save += f" [附加文件: {', '.join(filenames)}]"
                 self.mongo_handler.insert_chat_message(
                     sender=actual_user_name,
-                    message_text=user_message,
+                    message_text=message_to_save,
                     role_play_character=self.current_role_play_character,
                 )
-        else:
-            logger.info("Agent Mode: User message not saved to chat history.")
+        elif self.is_agent_mode_active_chat:
+            logger.info(
+                "Agent Mode: User message (and any files) not saved to chat history."
+            )
         self.input_field.clear()
         QApplication.processEvents()
         if self.async_thread and self.async_thread.isRunning():
             logger.warning("Previous async task still running. Please wait.")
             return
+        files_to_send_now = list(self.staged_files)
         current_task_thread = QThread(self)
         self.async_runner = AsyncRunner(
-            self._send_message_async_logic(user_message, self.is_agent_mode_active_chat)
+            self._send_message_async_logic(
+                user_message, self.is_agent_mode_active_chat, files_to_send_now
+            )
         )
         self.async_runner.moveToThread(current_task_thread)
         self.async_runner.task_completed.connect(self._handle_async_response)
@@ -336,20 +496,28 @@ class ChatDialog(QDialog):
         self.async_thread = current_task_thread
         self.send_button.setEnabled(False)
         self.input_field.setEnabled(False)
+        self.attach_button.setEnabled(False)
         self.async_thread.start()
+        self.staged_files.clear()
+        self._update_staged_files_ui()
 
     async def _send_message_async_logic(
-        self, user_message: str, is_agent_mode: bool
+        self,
+        user_message: str,
+        is_agent_mode: bool,
+        staged_media_files: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         try:
             if is_agent_mode:
                 if self.agent_core:
                     logger.info(
-                        f"Agent Mode: Processing user request: {user_message[:50]}..."
+                        f"Agent Mode: Processing user request: {user_message[:50]}... with {len(staged_media_files)} files."
                     )
                     response_data = await asyncio.wait_for(
-                        self.agent_core.process_user_request(user_message),
-                        timeout=120.0,
+                        self.agent_core.process_user_request(
+                            user_message, media_files=staged_media_files
+                        ),
+                        timeout=180.0,
                     )
                     response_data.setdefault("text", "Agent action processed.")
                     response_data.setdefault("emotion", "neutral")
@@ -362,26 +530,40 @@ class ChatDialog(QDialog):
                         "is_error": True,
                     }
             else:
-                response_data = await asyncio.wait_for(
-                    self.gemini_client.send_message(
-                        message_text=user_message,
-                        hippocampus_manager=self.hippocampus_manager,
-                        is_agent_mode=False,
-                    ),
-                    timeout=90.0,
-                )
+                if staged_media_files:
+                    response_data = await asyncio.wait_for(
+                        self.gemini_client.send_multimodal_message_async(
+                            text_prompt=user_message,
+                            media_files=staged_media_files,
+                        ),
+                        timeout=120.0,
+                    )
+                else:
+                    response_data = await asyncio.wait_for(
+                        self.gemini_client.send_message(
+                            message_text=user_message,
+                            hippocampus_manager=self.hippocampus_manager,
+                            is_agent_mode=False,
+                        ),
+                        timeout=90.0,
+                    )
                 return response_data
         except asyncio.TimeoutError:
             mode_str = "Agent指令" if is_agent_mode else "Gemini API调用"
-            logger.warning(f"{mode_str} timed out for message: {user_message[:50]}...")
+            files_info = (
+                f" with {len(staged_media_files)} files" if staged_media_files else ""
+            )
+            logger.warning(
+                f"{mode_str}{files_info} timed out for message: {user_message[:50]}..."
+            )
             return {
-                "text": f"呜，{self.pet_name}思考的时间好像太久了…… ({mode_str}超时)",
+                "text": f"呜，{self.pet_name}思考的时间好像太久了…… ({mode_str}{files_info}超时)",
                 "emotion": "default",
                 "is_error": True,
             }
         except Exception as e:
             logger.error(
-                f"Error in _send_message_async_logic (agent_mode={is_agent_mode}): {e}",
+                f"Error in _send_message_async_logic (agent_mode={is_agent_mode}, files={len(staged_media_files)}): {e}",
                 exc_info=True,
             )
             return {
@@ -434,6 +616,7 @@ class ChatDialog(QDialog):
         else:
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
+            self.attach_button.setEnabled(True)
             self.input_field.setFocus()
             self._add_message_to_display(self.pet_name, pet_text, is_user=False)
         if current_thread and current_thread.isRunning():
@@ -454,6 +637,7 @@ class ChatDialog(QDialog):
         else:
             self.send_button.setEnabled(True)
             self.input_field.setEnabled(True)
+            self.attach_button.setEnabled(True)
             self.input_field.setFocus()
             logger.error(f"Async task failed: {error_message}")
             self._add_message_to_display(
@@ -522,6 +706,8 @@ class ChatDialog(QDialog):
     def open_dialog(self):
         self._is_closing = False
         self.chat_display.clear()
+        self.staged_files.clear()
+        self._update_staged_files_ui()
         if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
             self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
         self._update_window_title_and_placeholder()
@@ -545,6 +731,7 @@ class ChatDialog(QDialog):
         self.input_field.clear()
         self.send_button.setEnabled(True)
         self.input_field.setEnabled(True)
+        self.attach_button.setEnabled(True)
         self.show()
         self.activateWindow()
         self.raise_()

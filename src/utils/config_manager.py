@@ -69,6 +69,16 @@ class ConfigManager:
             "MEMORY_SYSTEM", "CONSOLIDATE_INTERVAL_SECONDS", fallback=3600
         )
 
+    def get_memory_run_consolidate_on_startup(self) -> bool: # 新增方法
+        return self.config.getboolean(
+            "MEMORY_SYSTEM", "RUN_CONSOLIDATE_ON_STARTUP", fallback=True
+        )
+
+    def get_memory_run_build_on_startup_after_consolidate(self) -> bool: # 新增方法
+        return self.config.getboolean(
+            "MEMORY_SYSTEM", "RUN_BUILD_ON_STARTUP_AFTER_CONSOLIDATE", fallback=True
+        )
+
     def get_http_proxy(self):
         proxy = self.config.get("GEMINI", "HTTP_PROXY", fallback="").strip()
         return proxy if proxy else None

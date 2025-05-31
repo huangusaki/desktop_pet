@@ -751,9 +751,9 @@ class Hippocampus:
             : self.config.retrieval_max_candidates_for_llm_rerank
         ]
         to_llm_rerank_prompt_candidates = [
-            (topic, retrieval_text, score)
-            for topic, _eid, retrieval_text, score, _out_text in to_llm_rerank_input_full
-        ]
+    (topic, _out_text, score) # 将 retrieval_text 修改为 _out_text
+    for topic, _eid, _r_text_l1, score, _out_text in to_llm_rerank_input_full # _r_text_l1 只是为了明确它是 L1
+]
         candidates_output_map: Dict[Tuple[str, str], str] = {
             (cand_topic, cand_event_id): output_text
             for cand_topic, cand_event_id, _r_text, _score, output_text in to_llm_rerank_input_full
