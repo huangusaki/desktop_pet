@@ -1,16 +1,9 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
+from ..utils.config_manager import ConfigManager
+import logging
 
-try:
-    from ..utils.config_manager import ConfigManager
-except ImportError:
-    try:
-        from utils.config_manager import ConfigManager
-    except ImportError:
-        print(
-            "CRITICAL: Could not import ConfigManager for MemoryConfig. Ensure paths are correct."
-        )
-        ConfigManager = None
+logger = logging.getLogger("memory_system.config")
 
 
 @dataclass
@@ -51,6 +44,8 @@ class MemoryConfig:
     retrieval_max_candidates_for_llm_rerank: int = 15
     rerank_target_selection_count: int = 5
     keyword_retrieval_node_similarity_threshold: float = 0.8
+    retrieval_weight_activation: float = 0.4
+    retrieval_weight_summary: float = 0.6
     topic_calc_len_base: float = 1.0
     topic_calc_len_log_factor: float = 1.0
     topic_calc_len_short_thresh: int = 5
@@ -84,16 +79,25 @@ class MemoryConfig:
                 try:
                     return getattr(config_manager, method_to_call_str)()
                 except Exception as e:
+                    logger.error(
+                        f"Error calling {method_to_call_str} from ConfigManager: {e}"
+                    )
                     pass
             config_key_name = method_name_suffix.upper()
             raw_val = None
-            if config_manager.config.has_option(
-                config_manager._PARAMS_SECTION, config_key_name
-            ):
-                raw_val = config_manager.config.get(
-                    config_manager._PARAMS_SECTION,
+            if hasattr(config_manager, "config") and config_manager.config is not None:
+                if config_manager.config.has_option(
+                    getattr(config_manager, "_PARAMS_SECTION", "PARAMS"),
                     config_key_name,
-                    fallback=None,
+                ):
+                    raw_val = config_manager.config.get(
+                        getattr(config_manager, "_PARAMS_SECTION", "PARAMS"),
+                        config_key_name,
+                        fallback=None,
+                    )
+            else:
+                logger.warning(
+                    f"Warning: ConfigManager.config not accessible as expected for key {config_key_name}"
                 )
             if raw_val is not None:
                 try:
@@ -106,6 +110,9 @@ class MemoryConfig:
                             return fallback_value
                     return param_type(raw_val)
                 except ValueError:
+                    logger.warning(
+                        f"Warning: Could not convert value '{raw_val}' for {config_key_name} to {param_type}. Using fallback."
+                    )
                     return fallback_value
             return fallback_value
 
@@ -203,6 +210,12 @@ class MemoryConfig:
                 "keyword_retrieval_node_similarity_threshold",
                 cls.keyword_retrieval_node_similarity_threshold,
                 float,
+            ),
+            retrieval_weight_activation=get_param_from_cm(
+                "retrieval_weight_activation", cls.retrieval_weight_activation, float
+            ),
+            retrieval_weight_summary=get_param_from_cm(
+                "retrieval_weight_summary", cls.retrieval_weight_summary, float
             ),
             topic_calc_len_base=get_param_from_cm(
                 "topic_calc_len_base", cls.topic_calc_len_base, float

@@ -600,6 +600,7 @@ class Hippocampus:
             depth if depth is not None else self.config.retrieval_activation_depth
         )
         kws: List[str] = []
+        semantic_seeds_from_embedding: Set[str] = set()
         if fast_kw:
             try:
                 import jieba
@@ -631,13 +632,61 @@ class Hippocampus:
                 ),
             )
             kws = await self.extract_topics_from_text(txt, topic_n)
-        if not kws:
-            logger.info("未提取到有效关键词用于记忆检索。")
+            if kws and self.llm_embedding_topic:
+                query_text_embedding = await self.get_embedding_async(
+                    txt, request_type="memory_semantic_seed_query_embed"
+                )
+                if query_text_embedding:
+                    logger.debug(f"开始基于输入文本嵌入查找语义相似的种子节点...")
+                    candidate_semantic_seeds = []
+                    for node_name_iter, attr_iter in self.memory_graph.G.nodes(
+                        data=True
+                    ):
+                        node_concept_embedding = attr_iter.get("embedding")
+                        if node_concept_embedding and isinstance(
+                            node_concept_embedding, list
+                        ):
+                            try:
+                                sim_to_concept = cosine_similarity(
+                                    query_text_embedding, node_concept_embedding
+                                )
+                                if (
+                                    sim_to_concept
+                                    >= self.config.keyword_retrieval_node_similarity_threshold
+                                ):
+                                    candidate_semantic_seeds.append(
+                                        (node_name_iter, sim_to_concept)
+                                    )
+                                    logger.debug(
+                                        f"节点 '{node_name_iter}' (sim: {sim_to_concept:.4f}) 被识别为潜在语义种子。"
+                                    )
+                            except Exception as e:
+                                logger.error(
+                                    f"计算输入文本与概念节点 '{node_name_iter}' 嵌入相似度时出错: {e}"
+                                )
+                    for seed_name, _sim_score in candidate_semantic_seeds:
+                        semantic_seeds_from_embedding.add(seed_name)
+                    logger.info(
+                        f"通过嵌入相似度找到 {len(semantic_seeds_from_embedding)} 个额外的语义种子节点。"
+                    )
+        input_txt_keywords = set(kws)
+        if not kws and not semantic_seeds_from_embedding:
+            logger.info(
+                "未提取到有效关键词/主题，且未通过嵌入找到语义种子，无法进行记忆检索。"
+            )
             return []
-        seeds = [kw for kw in kws if kw in self.memory_graph.G]
+        string_match_seeds = [
+            kw_item for kw_item in kws if kw_item in self.memory_graph.G
+        ]
+        combined_seeds_set = set(string_match_seeds)
+        combined_seeds_set.update(semantic_seeds_from_embedding)
+        seeds = list(combined_seeds_set)
         if not seeds:
-            logger.info("提取关键词在记忆图中均不存在。")
+            logger.info(
+                "提取的关键词/主题在记忆图中均不存在，且未通过嵌入找到有效种子节点。"
+            )
             return []
+        logger.info(f"用于激活扩散的种子节点 (合并后): {seeds}")
         act_map: Dict[str, float] = {}
         for seed in seeds:
             q: List[Tuple[str, float, int]] = [(seed, 1.0, 0)]
@@ -683,19 +732,50 @@ class Hippocampus:
         if not txt_emb:
             logger.warning("无法获取输入文本嵌入，无法进行基于摘要相似度的排序。")
             return []
-        candidates_for_rerank: List[Tuple[str, str, str, float, str]] = []
+        candidates_with_scores: List[Tuple[str, str, str, float, str, float]] = []
         top_n_scan = self.config.retrieval_top_activated_nodes_to_scan
         min_sum_sim = self.config.retrieval_min_summary_similarity
-        for node_name, _act_score in sorted_act_nodes[:top_n_scan]:
+        max_activation_for_norm = 1.0
+        if sorted_act_nodes:
+            relevant_act_scores = [
+                score for _, score in sorted_act_nodes[:top_n_scan] if score > 0
+            ]
+            if relevant_act_scores:
+                max_activation_for_norm = max(relevant_act_scores)
+            if max_activation_for_norm == 0:
+                max_activation_for_norm = 1.0
+        w_L0 = 0.15
+        for node_name, original_act_score in sorted_act_nodes[:top_n_scan]:
             node_tuple = self.memory_graph.get_dot(node_name)
             if not node_tuple:
                 continue
             _concept, node_data = node_tuple
+            normalized_node_act_score = (
+                original_act_score / max_activation_for_norm
+                if max_activation_for_norm > 0
+                else 0.0
+            )
             for event in node_data.get("memory_events", []):
                 hs = event.get("hierarchical_summaries", {})
                 event_id = event.get(
                     "event_id", f"unknown_event_{uuid.uuid4().hex[:8]}"
                 )
+                event_L0_keywords_text = hs.get("L0_keywords", (None, None))[0]
+                event_L0_keywords_set = set()
+                if event_L0_keywords_text and isinstance(event_L0_keywords_text, str):
+                    event_L0_keywords_set = set(
+                        kw.strip()
+                        for kw in event_L0_keywords_text.split(",")
+                        if kw.strip()
+                    )
+                L0_match_score = 0.0
+                if input_txt_keywords and event_L0_keywords_set:
+                    intersection_len = len(
+                        input_txt_keywords.intersection(event_L0_keywords_set)
+                    )
+                    union_len = len(input_txt_keywords.union(event_L0_keywords_set))
+                    if union_len > 0:
+                        L0_match_score = intersection_len / union_len
                 retrieval_summary_data = hs.get(retrieval_summary_level)
                 output_summary_data = hs.get(output_summary_level)
                 if (
@@ -725,59 +805,77 @@ class Hippocampus:
                     continue
                 if retrieval_s_emb and isinstance(retrieval_s_emb, list):
                     try:
-                        sim = cosine_similarity(txt_emb, retrieval_s_emb)
-                        if sim >= min_sum_sim:
-                            candidates_for_rerank.append(
+                        summary_sim_score = cosine_similarity(txt_emb, retrieval_s_emb)
+                        if summary_sim_score >= min_sum_sim:
+                            current_w_act = self.config.retrieval_weight_activation
+                            current_w_sum = self.config.retrieval_weight_summary
+                            original_sum = current_w_act + current_w_sum
+                            adj_w_act = 0.0
+                            adj_w_sum = 0.0
+                            adj_w_l0 = 0.0
+                            if original_sum < 1e-6:
+                                if w_L0 > 0:
+                                    adj_w_l0 = w_L0
+                                else:
+                                    pass
+                            else:
+                                factor = (1.0 - w_L0) / original_sum
+                                adj_w_act = current_w_act * factor
+                                adj_w_sum = current_w_sum * factor
+                                adj_w_l0 = w_L0
+                            combined_score = (
+                                (adj_w_act * normalized_node_act_score)
+                                + (adj_w_sum * summary_sim_score)
+                                + (adj_w_l0 * L0_match_score)
+                            )
+                            candidates_with_scores.append(
                                 (
                                     node_name,
                                     event_id,
                                     retrieval_s_text,
-                                    sim,
+                                    summary_sim_score,
                                     output_s_text_str,
+                                    combined_score,
                                 )
                             )
                     except Exception as e:
                         logger.error(
-                            f"计算摘要相似度时出错 (节点 {node_name}, 事件 {event_id}): {e}"
+                            f"计算摘要相似度或组合分数时出错 (节点 {node_name}, 事件 {event_id}): {e}"
                         )
                         pass
-        if not candidates_for_rerank:
+        if not candidates_with_scores:
             logger.info(
-                f"无摘要 (层级 {retrieval_summary_level}) 通过相似度阈值 {min_sum_sim:.2f}。"
+                f"无摘要 (层级 {retrieval_summary_level}) 通过相似度阈值 {min_sum_sim:.2f}，或无法计算组合分数。"
             )
             return []
-        candidates_for_rerank.sort(key=lambda x: x[3], reverse=True)
-        to_llm_rerank_input_full = candidates_for_rerank[
+        candidates_with_scores.sort(key=lambda x: x[5], reverse=True)
+        to_llm_rerank_input_full_intermediate = candidates_with_scores[
             : self.config.retrieval_max_candidates_for_llm_rerank
         ]
         to_llm_rerank_prompt_candidates = [
-    (topic, _out_text, score) # 将 retrieval_text 修改为 _out_text
-    for topic, _eid, _r_text_l1, score, _out_text in to_llm_rerank_input_full # _r_text_l1 只是为了明确它是 L1
-]
+            (item[0], item[4], item[3])
+            for item in to_llm_rerank_input_full_intermediate
+        ]
         candidates_output_map: Dict[Tuple[str, str], str] = {
-            (cand_topic, cand_event_id): output_text
-            for cand_topic, cand_event_id, _r_text, _score, output_text in to_llm_rerank_input_full
+            (item[0], item[1]): item[4]
+            for item in to_llm_rerank_input_full_intermediate
         }
         final_mem_tuples: List[Tuple[str, str]] = []
         if self.llm_re_rank and to_llm_rerank_prompt_candidates:
             logger.info(
-                f"LLM({self.llm_re_rank.model_name})重排{len(to_llm_rerank_prompt_candidates)}条候选记忆 (基于 {retrieval_summary_level} 摘要)..."
+                f"LLM({self.llm_re_rank.model_name})重排{len(to_llm_rerank_prompt_candidates)}条候选记忆 (基于组合分数预排序, LLM见 {retrieval_summary_level} 摘要相似度)..."
             )
             prompt = self._create_bulk_relevance_check_prompt(
                 txt, to_llm_rerank_prompt_candidates
             )
             if not prompt:
-                logger.warning("LLM重排提示创建失败, 回退到原始相似度排序。")
-                for (
-                    topic,
-                    event_id,
-                    _r_text,
-                    _score,
-                    _o_text_mapped_by_key,
-                ) in to_llm_rerank_input_full:
-                    output_text_for_final = candidates_output_map.get((topic, event_id))
+                logger.warning("LLM重排提示创建失败, 回退到组合分数排序。")
+                for item_data in to_llm_rerank_input_full_intermediate:
+                    output_text_for_final = candidates_output_map.get(
+                        (item_data[0], item_data[1])
+                    )
                     if output_text_for_final:
-                        final_mem_tuples.append((topic, output_text_for_final))
+                        final_mem_tuples.append((item_data[0], output_text_for_final))
             else:
                 try:
                     resp = await self.llm_re_rank.generate_response_async(
@@ -794,14 +892,16 @@ class Hippocampus:
                                 if i.strip().isdigit()
                             ]
                             for idx in indices:
-                                if 0 <= idx < len(to_llm_rerank_input_full):
-                                    (
-                                        selected_topic,
-                                        selected_event_id,
-                                        _selected_retrieval_text,
-                                        _selected_score,
-                                        _selected_output_text_direct,
-                                    ) = to_llm_rerank_input_full[idx]
+                                if (
+                                    0
+                                    <= idx
+                                    < len(to_llm_rerank_input_full_intermediate)
+                                ):
+                                    selected_item_data = (
+                                        to_llm_rerank_input_full_intermediate[idx]
+                                    )
+                                    selected_topic = selected_item_data[0]
+                                    selected_event_id = selected_item_data[1]
                                     output_text_for_final = candidates_output_map.get(
                                         (selected_topic, selected_event_id)
                                     )
@@ -814,63 +914,45 @@ class Hippocampus:
                             )
                         except Exception as e:
                             logger.error(
-                                f"解析LLM重排索引失败:'{llm_order_str}' ({e}). 回退到原始相似度排序。"
+                                f"解析LLM重排索引失败:'{llm_order_str}' ({e}). 回退到组合分数排序。"
                             )
-                            for (
-                                topic,
-                                event_id,
-                                _r_text,
-                                _score,
-                                _o_text_mapped,
-                            ) in to_llm_rerank_input_full:
+                            for item_data in to_llm_rerank_input_full_intermediate:
                                 output_text_for_final = candidates_output_map.get(
-                                    (topic, event_id)
+                                    (item_data[0], item_data[1])
                                 )
                                 if output_text_for_final:
                                     final_mem_tuples.append(
-                                        (topic, output_text_for_final)
+                                        (item_data[0], output_text_for_final)
                                     )
                     else:
-                        logger.warning("LLM重排响应为空, 回退到原始相似度排序。")
-                        for (
-                            topic,
-                            event_id,
-                            _r_text,
-                            _score,
-                            _o_text_mapped,
-                        ) in to_llm_rerank_input_full:
+                        logger.warning("LLM重排响应为空, 回退到组合分数排序。")
+                        for item_data in to_llm_rerank_input_full_intermediate:
                             output_text_for_final = candidates_output_map.get(
-                                (topic, event_id)
+                                (item_data[0], item_data[1])
                             )
                             if output_text_for_final:
-                                final_mem_tuples.append((topic, output_text_for_final))
+                                final_mem_tuples.append(
+                                    (item_data[0], output_text_for_final)
+                                )
                 except Exception as e:
                     logger.error(f"LLM重排调用失败:{e}", exc_info=True)
-                    for (
-                        topic,
-                        event_id,
-                        _r_text,
-                        _score,
-                        _o_text_mapped,
-                    ) in to_llm_rerank_input_full:
+                    for item_data in to_llm_rerank_input_full_intermediate:
                         output_text_for_final = candidates_output_map.get(
-                            (topic, event_id)
+                            (item_data[0], item_data[1])
                         )
                         if output_text_for_final:
-                            final_mem_tuples.append((topic, output_text_for_final))
+                            final_mem_tuples.append(
+                                (item_data[0], output_text_for_final)
+                            )
         else:
             if not self.llm_re_rank:
-                logger.debug("重排LLM未配置，使用初步筛选结果。")
-            for (
-                topic,
-                event_id,
-                _r_text,
-                _score,
-                _o_text_mapped,
-            ) in to_llm_rerank_input_full:
-                output_text_for_final = candidates_output_map.get((topic, event_id))
+                logger.debug("重排LLM未配置，使用组合分数筛选结果。")
+            for item_data in to_llm_rerank_input_full_intermediate:
+                output_text_for_final = candidates_output_map.get(
+                    (item_data[0], item_data[1])
+                )
                 if output_text_for_final:
-                    final_mem_tuples.append((topic, output_text_for_final))
+                    final_mem_tuples.append((item_data[0], output_text_for_final))
         seen_summaries, unique_final_mems = set(), []
         for topic_name, summary_text in final_mem_tuples:
             if summary_text not in seen_summaries:
@@ -879,7 +961,7 @@ class Hippocampus:
             if len(unique_final_mems) >= max_mem:
                 break
         logger.info(
-            f"记忆检索完成 (基于 {retrieval_summary_level}, 输出 {output_summary_level}), 找到{len(unique_final_mems)}条。耗时:{time.time()-start_t:.3f}s"
+            f"记忆检索完成 (基于 {retrieval_summary_level} & 激活分数组合预选, 输出 {output_summary_level}), 找到{len(unique_final_mems)}条。耗时:{time.time()-start_t:.3f}s"
         )
         return unique_final_mems
 

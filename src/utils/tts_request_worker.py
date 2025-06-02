@@ -13,10 +13,15 @@ class TTSRequestWorker(QObject):
     finished = pyqtSignal()
 
     def __init__(
-        self, text_to_speak: str, config_manager: Any, parent: Optional[QObject] = None
+        self,
+        text_to_speak: str,
+        tone: str,
+        config_manager: Any,
+        parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
         self.text_to_speak = text_to_speak
+        self.tone = tone
         self.config_manager = config_manager
         self._is_running = True
         self.tts_api_base_url: Optional[str] = (
@@ -26,9 +31,27 @@ class TTSRequestWorker(QObject):
             self.config_manager.get_tts_api_endpoint()
         )
         self.tts_refer_wav_path: Optional[str] = (
-            self.config_manager.get_tts_refer_wav_path()
+            self.config_manager.get_tts_refer_wav_path_for_tone(self.tone)
         )
-        self.tts_prompt_text: Optional[str] = self.config_manager.get_tts_prompt_text()
+        if not self.tts_refer_wav_path:
+            default_tone = self.config_manager.get_tts_default_tone()
+            logger.warning(
+                f"TTSRequestWorker: 未找到语调 '{self.tone}' 的 REFER_WAV_PATH，尝试使用默认语调 '{default_tone}'。"
+            )
+            self.tts_refer_wav_path = (
+                self.config_manager.get_tts_refer_wav_path_for_tone(default_tone)
+            )
+        self.tts_prompt_text: Optional[str] = (
+            self.config_manager.get_tts_prompt_text_for_tone(self.tone)
+        )
+        if self.tts_prompt_text is None:
+            default_tone = self.config_manager.get_tts_default_tone()
+            logger.warning(
+                f"TTSRequestWorker: 未找到语调 '{self.tone}' 的 PROMPT_TEXT 或为空，尝试使用默认语调 '{default_tone}' 的 PROMPT_TEXT。"
+            )
+            self.tts_prompt_text = self.config_manager.get_tts_prompt_text_for_tone(
+                default_tone
+            )
         self.tts_prompt_language: Optional[str] = (
             self.config_manager.get_tts_prompt_language()
         )

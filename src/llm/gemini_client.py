@@ -22,6 +22,7 @@ except ImportError:
         HippocampusManager = None
 logger = logging.getLogger("GeminiClient")
 EmotionTypes = str
+ToneTypes = str
 
 
 class AgentStepSchema(BaseModel):
@@ -37,6 +38,10 @@ class AgentStepSchema(BaseModel):
 class PetResponseSchema(BaseModel):
     text: str = Field(..., description="Bot说的话, 或Agent的总体确认/错误信息")
     emotion: EmotionTypes = Field(..., description="Bot当前的情绪, 或Agent的情绪")
+    tone: Optional[ToneTypes] = Field(
+        None,
+        description="Bot说话的语调，用于TTS选择参考音频。例如 'normal', 'serious', 'sad'",
+    )
     image_description: Optional[str] = Field(
         None,
         description="对图片内容的客观描述，例如 '图片包含一只猫和一只狗' 或 '屏幕截图显示了一个代码编辑器'",
@@ -103,6 +108,8 @@ class GeminiClient:
         except Exception as e:
             raise ConnectionError(f"无法初始化 genai.Client(). 原始错误: {e}")
         self.enabled_tools = []
+        self.available_tones = self.config_manager.get_tts_available_tones()
+        self.default_tone = self.config_manager.get_tts_default_tone()
 
     async def _build_chat_contents_for_api(
         self,
@@ -169,7 +176,7 @@ class GeminiClient:
                     "is_error": True,
                 }
             generation_config_args = {
-                "temperature": 0.6 if is_agent_mode else 0.78,
+                "temperature": 0.6 if is_agent_mode else 0.70,
             }
             if self.enabled_tools and not is_agent_mode:
                 generation_config_args["tools"] = self.enabled_tools
@@ -268,7 +275,7 @@ class GeminiClient:
                     types.Part(text=f"\n用户补充说明：{prompt_text}")
                 )
             user_parts_for_vision.append(image_part_obj)
-            vision_config_args = {"temperature": 0.78}
+            vision_config_args = {"temperature": 0.70}
             if self.enabled_tools:
                 vision_config_args["tools"] = self.enabled_tools
             if self.thinking_budget is not None and self.thinking_budget > 0:
@@ -393,7 +400,7 @@ class GeminiClient:
                 return self._handle_empty_or_unparseable_response(
                     None, "Multimodal - No content to send"
                 )
-            multimodal_config_args = {"temperature": 0.78}
+            multimodal_config_args = {"temperature": 0.70}
             if self.enabled_tools:
                 multimodal_config_args["tools"] = self.enabled_tools
             if self.thinking_budget is not None and self.thinking_budget > 0:
@@ -496,6 +503,13 @@ class GeminiClient:
                         "GeminiClient: 未找到Markdown或明确的JSON边界，使用原始文本尝试解析。"
                     )
             parsed_data = json.loads(json_str_to_parse, strict=False)
+            if "tone" not in parsed_data or not parsed_data["tone"]:
+                parsed_data["tone"] = self.default_tone
+            elif parsed_data["tone"] not in self.available_tones:
+                logger.warning(
+                    f"GeminiClient: LLM返回的语调 '{parsed_data['tone']}' 不在可用语调列表中 ({self.available_tones})。将使用默认语调 '{self.default_tone}'。"
+                )
+                parsed_data["tone"] = self.default_tone
             validated_data = PetResponseSchema(**parsed_data)
             if is_agent_mode:
                 final_emotion = validated_data.emotion
@@ -627,7 +641,7 @@ class GeminiClient:
             if is_agent_mode:
                 extracted_data["steps"] = []
                 match_steps_block = re.search(
-                    r'"steps"\s*:\s*(\[[\s\S]*?\])\s*(?:,?\s*"(?:text|emotion|image_description|text_japanese|think)"|})',
+                    r'"steps"\s*:\s*(\[[\s\S]*?\])\s*(?:,?\s*"(?:text|emotion|image_description|text_japanese|think|tone)"|})',
                     text_for_regex,
                     re.DOTALL,
                 )
@@ -795,6 +809,7 @@ class GeminiClient:
         result = {
             "text": error_text,
             "emotion": "neutral" if is_agent_mode else self.unified_default_emotion,
+            "tone": self.default_tone,
             "thinking_process": thinking_on_error,
             "is_error": True,
         }
@@ -925,6 +940,7 @@ class GeminiClient:
                     else self.unified_default_emotion
                 )
             ),
+            "tone": self.default_tone,
             "thinking_process": thinking_on_error,
             "is_error": True,
         }

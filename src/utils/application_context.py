@@ -172,9 +172,9 @@ class ApplicationContext:
                     cf.write("; --- Memory System Configuration ---\n")
                     cf.write(
                         "[MEMORY_SYSTEM]\nBUILD_DISTRIBUTION = 3.0,2.0,0.5,72.0,24.0,0.5\nBUILD_SAMPLE_NUM = 5\nBUILD_SAMPLE_LENGTH = 10\nCOMPRESS_RATE = 0.08\nFORGET_TIME_HOURS = 48.0\nFORGET_PERCENTAGE = 0.005\nBAN_WORDS = 我,你,它,的,了,呢,吧,啊,哦,嗯\nCONSOLIDATE_PERCENTAGE = 0.1\nCONSOLIDATION_SIMILARITY_THRESHOLD = 0.90\n"
-                        "BUILD_INTERVAL_SECONDS = 600\nFORGET_INTERVAL_SECONDS = 3600\nCONSOLIDATE_INTERVAL_SECONDS = 3600\n" # 确保这些间隔配置也在
-                        "RUN_CONSOLIDATE_ON_STARTUP = True\n"  # 新增
-                        "RUN_BUILD_ON_STARTUP_AFTER_CONSOLIDATE = True\n\n"  # 新增
+                        "BUILD_INTERVAL_SECONDS = 600\nFORGET_INTERVAL_SECONDS = 3600\nCONSOLIDATE_INTERVAL_SECONDS = 3600\n"
+                        "RUN_CONSOLIDATE_ON_STARTUP = True\n"
+                        "RUN_BUILD_ON_STARTUP_AFTER_CONSOLIDATE = True\n\n"
                     )
                     cf.write(
                         "[MEMORY_SYSTEM_PARAMS]\nMAX_MEMORIZED_TIME_PER_MSG = 3\nKEYWORD_RETRIEVAL_NODE_SIMILARITY_THRESHOLD = 0.8\n\n"
@@ -609,14 +609,17 @@ class ApplicationContext:
     def perform_startup_tasks(self, app: QApplication):
         run_consolidate_on_startup = False
         run_build_after_consolidate_on_startup = False
-
         if self.config_manager:
-            run_consolidate_on_startup = self.config_manager.get_memory_run_consolidate_on_startup()
-            run_build_after_consolidate_on_startup = self.config_manager.get_memory_run_build_on_startup_after_consolidate()
+            run_consolidate_on_startup = (
+                self.config_manager.get_memory_run_consolidate_on_startup()
+            )
+            run_build_after_consolidate_on_startup = (
+                self.config_manager.get_memory_run_build_on_startup_after_consolidate()
+            )
         else:
-            logger.warning("ConfigManager未初始化，无法读取启动时记忆任务配置，将使用默认值（不执行）。")
-
-
+            logger.warning(
+                "ConfigManager未初始化，无法读取启动时记忆任务配置，将使用默认值（不执行）。"
+            )
         if self.hippocampus_manager and self.hippocampus_manager._initialized:
             if self.AsyncioHelper._loop and self.AsyncioHelper._loop.is_running():
 
@@ -626,17 +629,25 @@ class ApplicationContext:
                         await self._run_memory_consolidate()
                         logger.info("Context: 启动时记忆巩固任务完成。")
                         if run_build_after_consolidate_on_startup:
-                            logger.info("Context: 根据配置，在巩固后开始执行启动时记忆构建任务。")
+                            logger.info(
+                                "Context: 根据配置，在巩固后开始执行启动时记忆构建任务。"
+                            )
                             await self._run_memory_build()
                             logger.info("Context: 启动时记忆构建任务完成。")
                         else:
-                            logger.info("Context: 根据配置，启动时记忆巩固后不执行记忆构建。")
-                    elif run_build_after_consolidate_on_startup: # 如果仅构建被设置为true，而巩固为false
-                        logger.info("Context: 根据配置（仅构建），开始执行启动时记忆构建任务。")
+                            logger.info(
+                                "Context: 根据配置，启动时记忆巩固后不执行记忆构建。"
+                            )
+                    elif run_build_after_consolidate_on_startup:
+                        logger.info(
+                            "Context: 根据配置（仅构建），开始执行启动时记忆构建任务。"
+                        )
                         await self._run_memory_build()
                         logger.info("Context: 启动时记忆构建任务完成。")
                     else:
-                        logger.info("Context: 根据配置，启动时不执行记忆巩固和构建任务。")
+                        logger.info(
+                            "Context: 根据配置，启动时不执行记忆巩固和构建任务。"
+                        )
 
                 if run_consolidate_on_startup or run_build_after_consolidate_on_startup:
                     startup_mem_future = self.AsyncioHelper.schedule_task(
@@ -654,12 +665,9 @@ class ApplicationContext:
                 else:
                     logger.info("Context: 根据配置，跳过所有启动时记忆任务。")
             else:
-                logger.error(
-                    "Context: Asyncio loop 不可用，无法执行启动时记忆任务。"
-                )
+                logger.error("Context: Asyncio loop 不可用，无法执行启动时记忆任务。")
         else:
             logger.info("Context: 跳过启动时记忆任务，记忆系统未初始化或未导入。")
-
         initial_pet_message_text = "start！"
         if (
             self.mongo_handler

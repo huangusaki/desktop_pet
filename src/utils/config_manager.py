@@ -1,6 +1,7 @@
 import configparser
 import os
 import logging
+from typing import Optional, List
 
 logger = logging.getLogger("ConfigManager")
 
@@ -69,12 +70,12 @@ class ConfigManager:
             "MEMORY_SYSTEM", "CONSOLIDATE_INTERVAL_SECONDS", fallback=3600
         )
 
-    def get_memory_run_consolidate_on_startup(self) -> bool: # 新增方法
+    def get_memory_run_consolidate_on_startup(self) -> bool:
         return self.config.getboolean(
             "MEMORY_SYSTEM", "RUN_CONSOLIDATE_ON_STARTUP", fallback=True
         )
 
-    def get_memory_run_build_on_startup_after_consolidate(self) -> bool: # 新增方法
+    def get_memory_run_build_on_startup_after_consolidate(self) -> bool:
         return self.config.getboolean(
             "MEMORY_SYSTEM", "RUN_BUILD_ON_STARTUP_AFTER_CONSOLIDATE", fallback=True
         )
@@ -174,11 +175,34 @@ class ConfigManager:
     def get_tts_api_endpoint(self) -> str:
         return self.config.get("TTS", "API_ENDPOINT", fallback="tts")
 
-    def get_tts_refer_wav_path(self) -> str:
-        return self.config.get("TTS", "REFER_WAV_PATH", fallback="refer.wav")
+    def get_tts_refer_wav_path_for_tone(self, tone: str) -> Optional[str]:
+        """根据指定的语调获取参考WAV路径。"""
+        key = f"REFER_WAV_PATH_{tone.lower()}"
+        if self.config.has_option("TTS", key):
+            return self.config.get("TTS", key, fallback=None)
+        logger.warning(
+            f"ConfigManager: 未在 [TTS] section 中找到键 '{key}' for tone '{tone}'"
+        )
+        return None
 
-    def get_tts_prompt_text(self) -> str:
-        return self.config.get("TTS", "PROMPT_TEXT", fallback="")
+    def get_tts_prompt_text_for_tone(self, tone: str) -> Optional[str]:
+        """根据指定的语调获取提示文本。"""
+        key = f"PROMPT_TEXT_{tone.lower()}"
+        if self.config.has_option("TTS", key):
+            return self.config.get("TTS", key, fallback=None)
+        logger.warning(
+            f"ConfigManager: 未在 [TTS] section 中找到键 '{key}' for tone '{tone}'"
+        )
+        return None
+
+    def get_tts_available_tones(self) -> List[str]:
+        """获取可用的语调列表。"""
+        tones_str = self.config.get("TTS", "AVAILABLE_TONES", fallback="normal")
+        return [t.strip() for t in tones_str.split(",") if t.strip()]
+
+    def get_tts_default_tone(self) -> str:
+        """获取默认语调。"""
+        return self.config.get("TTS", "DEFAULT_TONE", fallback="normal")
 
     def get_tts_prompt_language(self) -> str:
         return self.config.get("TTS", "PROMPT_LANGUAGE", fallback="zh")

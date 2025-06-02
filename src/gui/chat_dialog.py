@@ -81,7 +81,7 @@ class AsyncRunner(QObject):
 class ChatDialog(QDialog):
     dialog_closed = pyqtSignal()
     speech_and_emotion_received = pyqtSignal(str, str)
-    chat_text_for_tts_ready = pyqtSignal(str)
+    chat_text_for_tts_ready = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -598,8 +598,11 @@ class ChatDialog(QDialog):
             pet_text = response_data.get("text", "我好像不知道该说什么了...")
             pet_emotion = response_data.get("emotion", "default")
             text_japanese = response_data.get("text_japanese")
+            llm_tone = response_data.get(
+                "tone", self.config_manager.get_tts_default_tone()
+            )
             if text_japanese and text_japanese.strip():
-                self.chat_text_for_tts_ready.emit(text_japanese)
+                self.chat_text_for_tts_ready.emit(text_japanese, llm_tone)
             if not is_error_response:
                 if self.mongo_handler and self.mongo_handler.is_connected():
                     actual_pet_name = self.config_manager.get_pet_name()

@@ -361,6 +361,7 @@ class ScreenAnalyzer(QObject):
     def _handle_llm_response(self, response_data: Dict[str, Any]):
         text_chinese = response_data.get("text", "Hmm...")
         emotion = response_data.get("emotion", "default")
+        tone = response_data.get("tone", self.config_manager.get_tts_default_tone())
         text_japanese = response_data.get("text_japanese")
         image_description_str = response_data.get("image_description", "")
         self.pet_reaction_ready.emit(text_chinese, emotion, image_description_str)
@@ -370,7 +371,7 @@ class ScreenAnalyzer(QObject):
             self._cleanup_analysis_thread_and_worker()
         if self.tts_enabled_globally:
             if text_japanese and text_japanese.strip():
-                self.request_tts(text_japanese, source="ScreenAnalysis")
+                self.request_tts(text_japanese, tone, source="ScreenAnalysis")
             elif not (text_japanese and text_japanese.strip()):
                 logger.info(
                     "TTS (Screen Analysis) - Japanese text is missing or empty. Skipping TTS."
@@ -379,26 +380,35 @@ class ScreenAnalyzer(QObject):
             if not self.tts_enabled_globally:
                 logger.info("TTS (Screen Analysis) - Global TTS is disabled.")
 
-    @pyqtSlot(str)
-    def play_tts_from_chat(self, japanese_text: str):
+    @pyqtSlot(str, str)
+    def play_tts_from_chat(self, japanese_text: str, tone: Optional[str] = None):
         if not self.tts_enabled_globally:
             logger.info("TTS (Chat) - Global TTS is disabled, not playing.")
             return
+        if tone is None:
+            tone = self.config_manager.get_tts_default_tone()
+            logger.debug(
+                f"play_tts_from_chat: Tone not provided, using default tone: {tone}"
+            )
         if japanese_text and japanese_text.strip():
-            self.request_tts(japanese_text, source="ChatDialog")
+            self.request_tts(japanese_text, tone, source="ChatDialog")
         else:
             logger.info("TTS (Chat) - Japanese text is missing or empty, skipping.")
 
-    def request_tts(self, text_to_speak: str, source: str = "Unknown"):
+    def request_tts(self, text_to_speak: str, tone: str, source: str = "Unknown"):
         if not self.tts_enabled_globally:
-            logger.info(f"TTS request from {source} ignored, global TTS is disabled.")
+            logger.info(
+                f"TTS request from {source} (tone: {tone}) ignored, global TTS is disabled."
+            )
             return
         if not text_to_speak or not text_to_speak.strip():
-            logger.info(f"TTS request from {source} ignored, text is empty.")
+            logger.info(
+                f"TTS request from {source} (tone: {tone}) ignored, text is empty."
+            )
             return
-        self.tts_queue.append(text_to_speak)
+        self.tts_queue.append((text_to_speak, tone))
         logger.info(
-            f"Added TTS request from {source} to queue (size: {len(self.tts_queue)}): '{text_to_speak[:30]}...'"
+            f"Added TTS request from {source} (tone: {tone}) to queue (size: {len(self.tts_queue)}): '{text_to_speak[:30]}...'"
         )
         self._try_process_next_tts_in_queue()
 
@@ -421,9 +431,13 @@ class ScreenAnalyzer(QObject):
             )
             return
         self.is_tts_processing = True
-        text_to_speak = self.tts_queue.popleft()
-        logger.info(f"Processing next TTS from queue: '{text_to_speak[:50]}...'")
-        self.tts_request_worker = TTSRequestWorker(text_to_speak, self.config_manager)
+        text_to_speak, tone_for_request = self.tts_queue.popleft()
+        logger.info(
+            f"Processing next TTS from queue (tone: {tone_for_request}): '{text_to_speak[:50]}...'"
+        )
+        self.tts_request_worker = TTSRequestWorker(
+            text_to_speak, tone_for_request, self.config_manager
+        )
         self.tts_request_thread = QThread()
         self.tts_request_worker.moveToThread(self.tts_request_thread)
         self.tts_request_worker.audio_ready.connect(self._handle_audio_playback)
