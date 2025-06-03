@@ -129,10 +129,10 @@ class PromptBuilder:
         persona_identity = f"你是{pet_name}，你的核心角色设定是：{pet_persona}\n你正在和{user_name}进行对话，下面是聊天记录：\n\n---------------------------------\n"
         behavioral_rules = f"""\n## 你的回答还应该遵守这些规则：
     1、严格遵守json格式输出规范，特别是think条目的输出要求。
-    2、一定要检查自己的回答，不要复述或总结前面的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
-    3、不要刻意突出人设，严禁提及任何设定里的内容，设定在各种地方通过对话自然流露，禁止发送emoji或者表情。
-    4、注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理，回复不应该总是围绕某个点。\n
-    5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，注意，不要盲目乐观。
+    2、一定要检查自己的回答，不要复述或总结前面的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，不要一直往某个话题/方向上靠，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
+    3、不要刻意突出人设，严禁提及任何设定里的内容，禁止发送emoji或者表情。
+    4、注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理。\n
+    5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，要盲目乐观。
 """
         system_instruction_part_A = persona_identity
         formatted_history_string = self._get_formatted_chat_history_content(
@@ -182,8 +182,8 @@ class PromptBuilder:
         )
         json_format_instruction = (
             "\n## attention: The output format is extremely important. Your MUST strictly follow JSON format and ONLY contain a JSON object with no other text or markdown (like ```json or ```) . \nThe target JSON object must include the following keys:\n"
-            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于2000个字，不要使用逗号、句号之外的符号。\n"
-            f"text:chinese str,about 50~150 characters,This is what {pet_name} will say to the {user_name}. Remember, {user_name} should not be changed anyway.\n"
+            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号（包括换行符）。\n"
+            f"text:chinese str,about 50~150 characters,This is what {pet_name} will say to the {user_name}. Remember, {user_name} should not be changed anytime.\n"
             f"emotion: This is your current emotion. the value MUST be one of the following predefined emotions (do not change the values): {emotions_str}.\n"
             f"tone: This is the tone of your voice for TTS. The value MUST be one of the following: {tones_str}. Default to '{self.default_tone}' if unsure.\n"
             f"text_japanese:japanese str, the original Japanese of the content in the 'text' field.\n"
@@ -231,7 +231,7 @@ class PromptBuilder:
             mongo_handler,
             pet_name=pet_name,
             read_from_main_chat_history=save_to_chat_history_config,
-            count=100,
+            count=30,
         )
         try:
             task_description = base_task_description_template.format(
@@ -249,7 +249,7 @@ class PromptBuilder:
             f"这张图片是{user_name}的屏幕截图。请根据屏幕内容，用你扮演的角色的口吻发表评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不要直接说“我看到屏幕上...”或“用户正在...”，不要使用「」、‘’这几个符号 ，也不要有（笑）（冷笑）等描写，而是更自然地表达，仿佛是你自己的想法，不超过120个字。\n"
             f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，接下来的回复禁止出现与这几条回复意思十分相近的词语和句子：\n{recent_screen_logs_str}\n\nattention: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object with no other text or markdown (like ```json or ```),"
             "The target JSON object must include the following keys:\n"
-            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于2000个字，不要使用逗号、句号之外的符号。\n"
+            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号（包括换行符）\n"
             f"image_description:Chinese str,about 100 characters long,detailed description of the main visual elements in the image.\n"
             f"emotion: This is your current emotion. The value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
             f"tone: This is the tone of your voice for TTS. The value MUST be one of the following: {tones_str}. Default to '{self.default_tone}' if unsure.\n"

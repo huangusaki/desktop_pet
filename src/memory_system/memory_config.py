@@ -54,7 +54,6 @@ class MemoryConfig:
     topic_calc_info_scale: float = 1.5
     topic_calc_info_max_absolute: int = 5
     sample_time_gap_threshold_seconds: int = 1800
-    sample_max_anchor_attempts: int = 10
     sample_min_snippet_messages: int = 2
     sample_max_snippet_messages: int = 50
 
@@ -242,9 +241,6 @@ class MemoryConfig:
                 "sample_time_gap_threshold_seconds",
                 cls.sample_time_gap_threshold_seconds,
                 int,
-            ),
-            sample_max_anchor_attempts=get_param_from_cm(
-                "sample_max_anchor_attempts", cls.sample_max_anchor_attempts, int
             ),
             sample_min_snippet_messages=get_param_from_cm(
                 "sample_min_snippet_messages", cls.sample_min_snippet_messages, int

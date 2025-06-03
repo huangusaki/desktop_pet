@@ -38,8 +38,7 @@ class EntorhinalCortex:
     def _get_chat_history_for_memory_sample(self) -> List[Dict[str, Any]]:
         """
         获取一个基于时间连续性的聊天记录片段作为记忆样本。
-        会随机选择一个锚点消息，然后向前后两个方向扩展，
-        只要消息间的时间戳间隔小于阈值，就认为属于同一话题。
+        会从头扫描聊天记录，寻找符合条件的连续对话片段。
         """
         if self.db is None or not hasattr(
             self.db, self.hippocampus.chat_collection_name
@@ -47,168 +46,122 @@ class EntorhinalCortex:
             logger.error("数据库或聊天集合未配置，无法获取记忆样本。")
             return []
         time_gap_threshold_seconds = self.config.sample_time_gap_threshold_seconds
-        max_attempts_for_anchor = self.config.sample_max_anchor_attempts
         min_snippet_messages = self.config.sample_min_snippet_messages
         max_snippet_messages = self.config.sample_max_snippet_messages
-        max_mem_time = self.config.max_memorized_time_per_msg
+        max_memorized_time = self.config.max_memorized_time_per_msg
+        pet_name_filter = self.hippocampus.pet_name_for_history_filter
         try:
-            query_filter = {
-                "role_play_character": self.hippocampus.pet_name_for_history_filter
-            }
-            total_eligible_messages = self.db[
-                self.hippocampus.chat_collection_name
-            ].count_documents(query_filter)
-            if total_eligible_messages == 0:
+            query_filter = {"role_play_character": pet_name_filter}
+            all_messages_cursor = (
+                self.db[self.hippocampus.chat_collection_name]
+                .find(query_filter)
+                .sort("timestamp", ASCENDING)
+            )
+            all_messages = list(all_messages_cursor)
+            if not all_messages:
                 logger.info("数据库中没有符合条件的消息，无法采样。")
                 return []
-            if total_eligible_messages < min_snippet_messages:
+            if len(all_messages) < min_snippet_messages:
                 logger.info(
-                    f"数据库中符合条件的消息总数 ({total_eligible_messages}) 少于设定的最小片段消息数 ({min_snippet_messages})，无法采样。"
+                    f"数据库中符合条件的消息总数 ({len(all_messages)}) 少于设定的最小片段消息数 ({min_snippet_messages})，无法采样。"
                 )
                 return []
-            for attempt in range(max_attempts_for_anchor):
-                logger.debug(
-                    f"尝试第 {attempt + 1}/{max_attempts_for_anchor} 次选择锚点..."
-                )
-                random_skip = random.randint(0, total_eligible_messages - 1)
-                anchor_message_cursor = (
-                    self.db[self.hippocampus.chat_collection_name]
-                    .find(query_filter)
-                    .sort("timestamp", ASCENDING)
-                    .skip(random_skip)
-                    .limit(1)
-                )
-                anchor_list = list(anchor_message_cursor)
-                if not anchor_list:
-                    logger.warning(
-                        f"尝试 {attempt + 1}: 未能获取到锚点消息，即使总数 ({total_eligible_messages}) 大于0。跳过 {random_skip}。"
-                    )
-                    continue
-                anchor_message = anchor_list[0]
-                current_snippet = [anchor_message]
-                logger.debug(
-                    f"尝试 {attempt + 1}: 选定锚点消息 ID: {anchor_message.get('_id')}, Timestamp: {anchor_message.get('timestamp')}"
-                )
-                backward_messages_collected = []
-                last_timestamp_in_chain = anchor_message["timestamp"]
-                backward_scan_limit = max_snippet_messages * 2
-                backward_candidates_cursor = (
-                    self.db[self.hippocampus.chat_collection_name]
-                    .find(
-                        {
-                            "role_play_character": self.hippocampus.pet_name_for_history_filter,
-                            "timestamp": {"$lt": anchor_message["timestamp"]},
-                        }
-                    )
-                    .sort("timestamp", DESCENDING)
-                    .limit(backward_scan_limit)
-                )
-                for prev_msg in backward_candidates_cursor:
-                    if (
-                        last_timestamp_in_chain - prev_msg["timestamp"]
-                    ) < time_gap_threshold_seconds:
-                        backward_messages_collected.append(prev_msg)
-                        last_timestamp_in_chain = prev_msg["timestamp"]
+            logger.info(f"开始全表扫描 {len(all_messages)} 条消息以构建记忆样本...")
+            current_snippet_start_index = 0
+            while current_snippet_start_index < len(all_messages):
+                potential_snippet: List[Dict[str, Any]] = []
+                last_timestamp_in_chain = -1
+                for i in range(current_snippet_start_index, len(all_messages)):
+                    current_message = all_messages[i]
+                    if not potential_snippet:
+                        potential_snippet.append(current_message)
+                        last_timestamp_in_chain = current_message["timestamp"]
+                    else:
                         if (
-                            len(backward_messages_collected) + len(current_snippet)
-                            >= max_snippet_messages
-                        ):
-                            logger.debug(
-                                f"向前扩展达到最大片段消息数 ({max_snippet_messages})。"
-                            )
+                            current_message["timestamp"] - last_timestamp_in_chain
+                        ) < time_gap_threshold_seconds:
+                            potential_snippet.append(current_message)
+                            last_timestamp_in_chain = current_message["timestamp"]
+                        else:
                             break
-                    else:
-                        logger.debug(
-                            f"向前扩展时遇到时间间隔过大: {last_timestamp_in_chain - prev_msg['timestamp']}s > {time_gap_threshold_seconds}s。"
-                        )
+                    if len(potential_snippet) >= max_snippet_messages:
                         break
-                current_snippet = (
-                    list(reversed(backward_messages_collected)) + current_snippet
-                )
                 logger.debug(
-                    f"尝试 {attempt + 1}: 向前扩展后，片段长度 {len(current_snippet)}。"
+                    f"形成潜在片段，起始索引: {current_snippet_start_index}, 长度: {len(potential_snippet)}."
+                    f" (首消息ID: {potential_snippet[0].get('_id') if potential_snippet else 'N/A'}, "
+                    f"尾消息ID: {potential_snippet[-1].get('_id') if potential_snippet else 'N/A'})"
                 )
-                if current_snippet:
-                    last_timestamp_in_chain = current_snippet[-1]["timestamp"]
+                if len(potential_snippet) < min_snippet_messages:
+                    logger.debug(
+                        f"潜在片段长度 ({len(potential_snippet)}) 小于最小要求 ({min_snippet_messages})。"
+                    )
+                    if not potential_snippet:
+                        current_snippet_start_index += 1
+                    else:
+                        current_snippet_start_index += 1
+                    continue
+                last_message_in_potential_snippet = potential_snippet[-1]
+                last_message_timestamp_val = last_message_in_potential_snippet.get(
+                    "timestamp"
+                )
+                if last_message_timestamp_val is not None:
+                    current_system_timestamp = datetime.now().timestamp()
+                    time_since_last_message = (
+                        current_system_timestamp - last_message_timestamp_val
+                    )
+                    if (
+                        time_since_last_message
+                        < self.config.sample_time_gap_threshold_seconds
+                    ):
+                        logger.info(
+                            f"潜在片段 (首消息ID: {potential_snippet[0].get('_id')}) 因最后消息太新而被跳过。"
+                            f"最后消息时间距现在: {time_since_last_message:.0f}s (阈值: {self.config.sample_time_gap_threshold_seconds}s)."
+                        )
+                        current_snippet_start_index += 1
+                        continue
                 else:
                     logger.warning(
-                        f"尝试 {attempt + 1}: 向前扩展后 current_snippet 为空，异常情况。"
+                        f"潜在片段 (首消息ID: {potential_snippet[0].get('_id')}) 最后一条消息无时间戳，跳过新近度检查。"
                     )
+                    current_snippet_start_index += 1
                     continue
-                forward_scan_limit = max_snippet_messages * 2
-                forward_candidates_cursor = (
-                    self.db[self.hippocampus.chat_collection_name]
-                    .find(
-                        {
-                            "role_play_character": self.hippocampus.pet_name_for_history_filter,
-                            "timestamp": {"$gt": last_timestamp_in_chain},
-                        }
-                    )
-                    .sort("timestamp", ASCENDING)
-                    .limit(forward_scan_limit)
-                )
-                for next_msg in forward_candidates_cursor:
-                    if (
-                        next_msg["timestamp"] - last_timestamp_in_chain
-                    ) < time_gap_threshold_seconds:
-                        current_snippet.append(next_msg)
-                        last_timestamp_in_chain = next_msg["timestamp"]
-                        if len(current_snippet) >= max_snippet_messages:
-                            logger.debug(
-                                f"向后扩展达到最大片段消息数 ({max_snippet_messages})。"
-                            )
-                            break
-                    else:
+                all_messages_in_snippet_pass_memorized_times_check = True
+                for msg_in_snippet in potential_snippet:
+                    if msg_in_snippet.get("memorized_times", 0) >= max_memorized_time:
+                        all_messages_in_snippet_pass_memorized_times_check = False
                         logger.debug(
-                            f"向后扩展时遇到时间间隔过大: {next_msg['timestamp'] - last_timestamp_in_chain}s > {time_gap_threshold_seconds}s。"
+                            f"潜在片段因消息 ID '{msg_in_snippet.get('_id')}' (memorized_times: {msg_in_snippet.get('memorized_times', 0)}) 不合格。"
                         )
                         break
-                logger.debug(
-                    f"尝试 {attempt + 1}: 向后扩展后，片段长度 {len(current_snippet)}。"
-                )
-                if len(current_snippet) < min_snippet_messages:
-                    logger.debug(
-                        f"尝试 {attempt + 1}: 最终片段长度 ({len(current_snippet)}) 小于最小要求 ({min_snippet_messages})。"
-                    )
+                if not all_messages_in_snippet_pass_memorized_times_check:
+                    current_snippet_start_index += 1
                     continue
-                valid_snippet = True
-                for msg_in_snippet in current_snippet:
-                    if msg_in_snippet.get("memorized_times", 0) >= max_mem_time:
-                        valid_snippet = False
-                        logger.debug(
-                            f"尝试 {attempt + 1}: 片段中消息 ID '{msg_in_snippet.get('_id')}' 已被过度记忆。"
-                        )
-                        break
-                if valid_snippet:
-                    ids_to_update = [
-                        msg["_id"] for msg in current_snippet if "_id" in msg
-                    ]
-                    if ids_to_update:
-                        update_result = self.db[
-                            self.hippocampus.chat_collection_name
-                        ].update_many(
-                            {"_id": {"$in": ids_to_update}},
-                            {"$inc": {"memorized_times": 1}},
-                        )
-                        logger.info(
-                            f"采样到合格连续对话片段 (长度: {len(current_snippet)}，锚点ID: {anchor_message.get('_id')})。更新了 {update_result.modified_count} 条记录的 memorized_times。"
-                        )
-                    else:
-                        logger.info(
-                            f"采样到合格连续对话片段 (长度: {len(current_snippet)}，锚点ID: {anchor_message.get('_id')})。无需更新 memorized_times (无 _id?)。"
-                        )
-                    return current_snippet
+                ids_to_update = [
+                    msg["_id"] for msg in potential_snippet if "_id" in msg
+                ]
+                if ids_to_update:
+                    update_result = self.db[
+                        self.hippocampus.chat_collection_name
+                    ].update_many(
+                        {"_id": {"$in": ids_to_update}},
+                        {"$inc": {"memorized_times": 1}},
+                    )
+                    logger.info(
+                        f"通过顺序扫描采样到合格连续对话片段 (长度: {len(potential_snippet)}，"
+                        f"首消息ID: {potential_snippet[0].get('_id')}, 尾消息ID: {potential_snippet[-1].get('_id')})。"
+                        f"更新了 {update_result.modified_count} 条记录的 memorized_times。"
+                    )
                 else:
-                    logger.debug(
-                        f"尝试 {attempt + 1}: 片段因包含过度记忆的消息而不合格。"
+                    logger.info(
+                        f"通过顺序扫描采样到合格连续对话片段 (长度: {len(potential_snippet)}，"
+                        f"首消息ID: {potential_snippet[0].get('_id')}, 尾消息ID: {potential_snippet[-1].get('_id')})。"
+                        f"无需更新 memorized_times (无 _id?)。"
                     )
-                    continue
-            logger.warning(
-                f"经过 {max_attempts_for_anchor} 次选择锚点的尝试，未能找到合适的连续对话片段。"
-            )
+                return potential_snippet
+            logger.info("全表扫描完成，未能找到符合所有条件的连续对话片段。")
             return []
         except Exception as e:
-            logger.error(f"获取连续对话样本时发生意外错误: {e}", exc_info=True)
+            logger.error(f"顺序扫描获取连续对话样本时发生意外错误: {e}", exc_info=True)
             return []
 
     def get_memory_sample(self) -> List[List[Dict[str, Any]]]:

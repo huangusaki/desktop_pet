@@ -1,3 +1,4 @@
+
 from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
@@ -39,10 +40,10 @@ class PetWindow(QWidget):
             available_emotions if available_emotions else ["default"]
         )
         self.pet_size_preference = "medium"
-        self.config_manager = self.app_context.config_manager
-        self.agent_core = self.app_context.agent_core
+        self.config_manager = self.app_context.config_manager # app_context.config_manager 应该在此时可用
+        self.agent_core = self.app_context.agent_core # app_context.agent_core 可能还未完全初始化
         self.is_agent_mode_active_internal = False
-        if self.agent_core:
+        if self.agent_core: # agent_core 的状态确定方式保持不变
             if hasattr(self.agent_core, "is_agent_mode_active"):
                 self.is_agent_mode_active_internal = (
                     self.agent_core.is_agent_mode_active
@@ -52,6 +53,17 @@ class PetWindow(QWidget):
                     "AgentCore provided but 'is_agent_mode_active' attribute not found. Defaulting to False."
                 )
                 self.is_agent_mode_active_internal = False
+        
+        # 初始化屏幕截图分析的运行时状态，此时仅根据配置文件
+        # 我们假设如果配置为True, ScreenAnalyzer 稍后会被 ApplicationContext 创建
+        self.is_screen_analysis_runtime_active = False # 默认值
+        if self.config_manager:
+            self.is_screen_analysis_runtime_active = self.config_manager.get_screen_analysis_enabled()
+            logger.info(f"根据配置文件，屏幕截图分析初始期望状态: {self.is_screen_analysis_runtime_active}")
+        else:
+            logger.warning("ConfigManager 未初始化，无法确定屏幕截图分析的初始期望状态。默认为禁用。")
+            self.is_screen_analysis_runtime_active = False
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -344,42 +356,67 @@ class PetWindow(QWidget):
                 self.set_speech_text("")
 
     def _toggle_agent_mode(self, checked: bool):
-        if self.agent_core:
-            self.agent_core.set_agent_mode(checked)
+        # agent_core 应该在 ApplicationContext.initialize_async_services() 中初始化
+        # 比 PetWindow 的创建要早，所以此时 self.app_context.agent_core 应该是最终状态
+        if self.app_context.agent_core: # 确保 agent_core 确实存在
+            self.app_context.agent_core.set_agent_mode(checked)
             self.is_agent_mode_active_internal = checked
             self.agent_mode_toggled_signal.emit(checked)
-            pet_name_for_speech = "Pet"
-            if self.config_manager and hasattr(self.config_manager, "get_pet_name"):
-                pet_name_for_speech = self.config_manager.get_pet_name()
             if checked:
-                self.set_speech_text("Agent on")
+                self.set_speech_text("Agent模式已开启") 
                 agent_mode_emotion = "default"
-                agent_emotions_config = self.config_manager.config.get(
-                    "PET", "AGENT_MODE_EMOTIONS", fallback="neutral, focused, helpful"
-                )
-                preferred_agent_emotions = [
-                    e.strip().lower() for e in agent_emotions_config.split(",")
-                ]
-                if "focused" in preferred_agent_emotions and "focused" in [
-                    e.lower() for e in self.available_emotions_for_test
-                ]:
-                    agent_mode_emotion = "focused"
-                elif "neutral" in preferred_agent_emotions and "neutral" in [
-                    e.lower() for e in self.available_emotions_for_test
-                ]:
-                    agent_mode_emotion = "neutral"
+                if self.config_manager: 
+                    agent_emotions_config = self.config_manager.config.get(
+                        "PET", "AGENT_MODE_EMOTIONS", fallback="neutral, focused, helpful"
+                    )
+                    preferred_agent_emotions = [
+                        e.strip().lower() for e in agent_emotions_config.split(",")
+                    ]
+                    if "focused" in preferred_agent_emotions and "focused" in [
+                        e.lower() for e in self.available_emotions_for_test
+                    ]:
+                        agent_mode_emotion = "focused"
+                    elif "neutral" in preferred_agent_emotions and "neutral" in [
+                        e.lower() for e in self.available_emotions_for_test
+                    ]:
+                        agent_mode_emotion = "neutral"
                 self.set_emotion(agent_mode_emotion)
             else:
-                self.set_speech_text("Agent off")
+                self.set_speech_text("Agent模式已关闭") 
                 self.set_emotion("default")
-            logger.info(f"Toggled Agent Mode to: {checked}")
+            logger.info(f"Agent模式切换为: {checked}")
         else:
             logger.warning(
-                "Attempted to toggle Agent Mode, but AgentCore is not available."
+                "尝试切换Agent模式失败，AgentCore模块不可用 (self.app_context.agent_core is None)。"
             )
             self.set_speech_text("Agent核心模块不可用。")
+            self.is_agent_mode_active_internal = False # 确保内部状态同步
             if hasattr(self, "agent_mode_action_in_menu"):
                 self.agent_mode_action_in_menu.setChecked(False)
+                self.agent_mode_action_in_menu.setEnabled(False)
+
+
+    def _toggle_runtime_screen_analysis(self, checked: bool):
+        # 此处 self.app_context.screen_analyzer 应该是 ApplicationContext 初始化后的最终状态
+        if self.app_context.screen_analyzer: 
+            if checked:
+                self.app_context.screen_analyzer.start_monitoring()
+                self.set_speech_text("屏幕分析已启用")
+                logger.info("通过右键菜单启用屏幕截图分析。")
+                self.is_screen_analysis_runtime_active = True
+            else:
+                self.app_context.screen_analyzer.stop_monitoring()
+                self.set_speech_text("屏幕分析已禁用")
+                logger.info("通过右键菜单禁用屏幕截图分析。")
+                self.is_screen_analysis_runtime_active = False
+        else:
+            self.set_speech_text("屏幕分析模块不可用。")
+            logger.warning("尝试切换屏幕分析状态，但ScreenAnalyzer模块不可用 (self.app_context.screen_analyzer is None)。")
+            self.is_screen_analysis_runtime_active = False 
+            if hasattr(self, 'screen_analysis_action_in_menu'):
+                self.screen_analysis_action_in_menu.setChecked(False) 
+                self.screen_analysis_action_in_menu.setEnabled(False) 
+
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -408,18 +445,46 @@ class PetWindow(QWidget):
         size_action_group.addAction(large_action)
         size_menu.addAction(large_action)
         menu.addSeparator()
+
+        # Agent模式切换
         self.agent_mode_action_in_menu = QAction("Agent模式 (实验性)", self)
         self.agent_mode_action_in_menu.setCheckable(True)
-        if self.agent_core:
+        # 在contextMenuEvent被调用时，self.app_context.agent_core 应该是其最终状态
+        if self.app_context.agent_core: 
             self.agent_mode_action_in_menu.setChecked(
-                self.is_agent_mode_active_internal
+                self.is_agent_mode_active_internal 
             )
             self.agent_mode_action_in_menu.triggered.connect(self._toggle_agent_mode)
         else:
             self.agent_mode_action_in_menu.setText("Agent模式 (不可用)")
             self.agent_mode_action_in_menu.setEnabled(False)
+            self.is_agent_mode_active_internal = False # 如果不可用，同步内部状态
         menu.addAction(self.agent_mode_action_in_menu)
-        menu.addSeparator()
+
+        # 屏幕截图分析运行时切换
+        self.screen_analysis_action_in_menu = QAction("启用屏幕截图分析", self)
+        self.screen_analysis_action_in_menu.setCheckable(True)
+
+        # 在contextMenuEvent被调用时，self.app_context.screen_analyzer 应该是其最终状态
+        if self.app_context.screen_analyzer:
+            # 勾选状态基于 PetWindow 内部维护的 is_screen_analysis_runtime_active,
+            # 其初始值来自配置文件。
+            self.screen_analysis_action_in_menu.setChecked(self.is_screen_analysis_runtime_active)
+            self.screen_analysis_action_in_menu.triggered.connect(self._toggle_runtime_screen_analysis)
+            self.screen_analysis_action_in_menu.setEnabled(True)
+        else:
+            # 如果 ScreenAnalyzer 模块最终没有被 ApplicationContext 创建成功
+            self.screen_analysis_action_in_menu.setText("屏幕截图分析 (不可用)")
+            self.screen_analysis_action_in_menu.setChecked(False) 
+            self.screen_analysis_action_in_menu.setEnabled(False)
+            # 确保 PetWindow 的内部状态也反映模块不可用
+            self.is_screen_analysis_runtime_active = False
+            logger.debug("右键菜单：ScreenAnalyzer 模块不可用，屏幕分析选项已禁用。")
+
+        menu.addAction(self.screen_analysis_action_in_menu)
+        
+        menu.addSeparator() 
+
         testable_emotions = self.available_emotions_for_test
         emotion_menu = menu.addMenu("测试情绪")
         if testable_emotions:

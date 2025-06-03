@@ -442,11 +442,6 @@ class ConfigManager:
             self._PARAMS_SECTION, "SAMPLE_TIME_GAP_THRESHOLD_SECONDS", fallback=1800
         )
 
-    def get_memory_sample_max_anchor_attempts(self) -> int:
-        return self.config.getint(
-            self._PARAMS_SECTION, "SAMPLE_MAX_ANCHOR_ATTEMPTS", fallback=10
-        )
-
     def get_memory_sample_min_snippet_messages(self) -> int:
         return self.config.getint(
             self._PARAMS_SECTION, "SAMPLE_MIN_SNIPPET_MESSAGES", fallback=2
