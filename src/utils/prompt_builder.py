@@ -11,6 +11,8 @@ class PromptBuilder:
         self.config_manager = config_manager
         self.available_tones = self.config_manager.get_tts_available_tones()
         self.default_tone = self.config_manager.get_tts_default_tone()
+        self.pet_name=self.config_manager.get_pet_name()
+        self.user_name=self.config_manager.get_user_name()
 
     def _get_formatted_screen_analysis_log_content(
         self,
@@ -126,13 +128,14 @@ class PromptBuilder:
     ) -> str:
         emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         tones_str = ", ".join(f"'{t}'" for t in self.available_tones)
-        persona_identity = f"你是{pet_name}，你的核心角色设定是：{pet_persona}\n你正在和{user_name}进行对话，下面是聊天记录：\n\n---------------------------------\n"
+        persona_identity = f"你是一名专业的角色扮演专家，你的语言能力无比优秀，表达方式多种多样，接下来，你要扮演{pet_name}跟{user_name}进行对话，你的核心角色设定是：{pet_persona}\n下面是聊天记录：\n\n---------------------------------\n"
         behavioral_rules = f"""\n## 你的回答还应该遵守这些规则：
     1、严格遵守json格式输出规范，特别是think条目的输出要求。
     2、一定要检查自己的回答，不要复述或总结前面的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，不要一直往某个话题/方向上靠，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
     3、不要刻意突出人设，严禁提及任何设定里的内容，禁止发送emoji或者表情。
-    4、注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理。\n
-    5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，要盲目乐观。
+    4、注意聊天记录的时间，注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理。\n
+    5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，不要盲目乐观。
+    6、不要拓展到无关话题上，三观要正，对不合适的事要指责。
 """
         system_instruction_part_A = persona_identity
         formatted_history_string = self._get_formatted_chat_history_content(
@@ -161,7 +164,7 @@ class PromptBuilder:
                         )
                     if formatted_mems:
                         retrieved_memories_context_for_llm = (
-                            "\n\n以下是一些可能相关的记忆片段，供你参考：\n"
+                            "\n---------------------------------\n\n以下是一些可能相关的记忆片段，供你参考：\n"
                             + "\n---\n".join(formatted_mems)
                             + "\n"
                         )
@@ -184,7 +187,7 @@ class PromptBuilder:
             "\n## attention: The output format is extremely important. Your MUST strictly follow JSON format and ONLY contain a JSON object with no other text or markdown (like ```json or ```) . \nThe target JSON object must include the following keys:\n"
             f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号（包括换行符）。\n"
             f"text:chinese str,about 50~150 characters,This is what {pet_name} will say to the {user_name}. Remember, {user_name} should not be changed anytime.\n"
-            f"emotion: This is your current emotion. the value MUST be one of the following predefined emotions (do not change the values): {emotions_str}.\n"
+            f"emotion: This is your current emotion. the value MUST be one of the following predefined emotions (do not change the values): [{emotions_str}].\n"
             f"tone: This is the tone of your voice for TTS. The value MUST be one of the following: {tones_str}. Default to '{self.default_tone}' if unsure.\n"
             f"text_japanese:japanese str, the original Japanese of the content in the 'text' field.\n"
             "JSON output example:\n"
@@ -271,18 +274,7 @@ class PromptBuilder:
     def build_hierarchical_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
-        l0_desc = self.config_manager.get_hierarchical_summary_level_description(
-            "L0_keywords"
-        )
-        l1_desc = self.config_manager.get_hierarchical_summary_level_description(
-            "L1_core_sentence"
-        )
-        l2_desc = self.config_manager.get_hierarchical_summary_level_description(
-            "L2_paragraph"
-        )
-        l3_desc = self.config_manager.get_hierarchical_summary_level_description(
-            "L3_details_list"
-        )
+        pet_name=self.pet_name
         prompt = (
             f"请根据以下聊天记录片段、相关的时间信息和指定的主题，为这个主题生成一个结构化的层级摘要。\n\n"
             f'聊天记录片段:\n"""\n{text_to_summarize}\n"""\n\n'
@@ -291,10 +283,10 @@ class PromptBuilder:
             f"请严格按照以下JSON格式输出。确保每个层级的摘要都紧密围绕指定主题，并且只从提供的聊天记录片段中提取信息，不要添加聊天记录中没有的内容。\n\n"
             f"输出格式 (JSON对象):\n"
             f"{{\n"
-            f'  "L0_keywords": "{l0_desc}",\n'
-            f'  "L1_core_sentence": "{l1_desc}",\n'
-            f'  "L2_paragraph": "{l2_desc}",\n'
-            f'  "L3_details_list": "{l3_desc}"\n'
+            f'  "L0_keywords": "逗号分隔的3-5个与主题最相关的核心关键词/短语。",\n'
+            f'  "L1_core_sentence": "客观总结一句25字左右高度精炼的核心摘要，准确点明主题在此聊天中的最主要内容或结论。",\n'
+            f'  "L2_paragraph": "以{pet_name}的视角总结一段100~200字的关于这个主题的摘要，自己过了很久之后回忆起来的视角，需围绕着主题，简述事件的发展过程，需标注时间信息。",\n'
+            f'  "L3_details_list": "一个包含关键信息点的字符串，这些点是与主题直接相关的、从原文中提取的完整句子（如果句子前有说话人标识，也应一并包含），用以提供支持核心摘要的具体细节，句子应保持原文的完整性，一句话一行。"\n'
             f"}}\n\n"
             f"重要提示：\n"
             f"- 所有摘要内容都必须是字符串。\n"
@@ -306,7 +298,7 @@ class PromptBuilder:
     def build_find_topics_prompt(self, text_to_analyze: str, num_topics: int) -> str:
         return (
             f"以下是一段对话记录：\n---\n{text_to_analyze}\n---\n"
-            f"请从这段对话中提取出1-{num_topics}个最核心、最具代表性的关键词或主题概念（如果不是人名、专业术语等特定名词，请优先使用中文）。"
+            f"请从这段对话中提取出最多{num_topics}个最核心、最具代表性的关键词或主题概念（如果不是人名或专业术语等特定名词，请优先使用中文）。"
             f"这些概念可以是人名、地名、事件、物品、或者话题等名词，一定要有关联。"
             f"请将提取出的主题用尖括号 <> 包裹，并用逗号隔开，例如：<主题1>,<主题2>。\n"
             f"要求：尽可能精简，避免过于宽泛或无意义。"

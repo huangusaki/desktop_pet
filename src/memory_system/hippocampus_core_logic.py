@@ -744,7 +744,7 @@ class Hippocampus:
                 max_activation_for_norm = max(relevant_act_scores)
             if max_activation_for_norm == 0:
                 max_activation_for_norm = 1.0
-        w_L0 = 0.15
+        w_L0 = 0.28
         for node_name, original_act_score in sorted_act_nodes[:top_n_scan]:
             node_tuple = self.memory_graph.get_dot(node_name)
             if not node_tuple:

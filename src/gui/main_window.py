@@ -1,16 +1,14 @@
-
 from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
     QVBoxLayout,
     QApplication,
     QMenu,
-    QSizePolicy,
 )
 from PyQt6.QtGui import QPixmap, QMouseEvent, QGuiApplication, QAction, QActionGroup
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QTimer
 import os
-from typing import List, Any, Optional
+from typing import List, Any
 import logging
 
 logger = logging.getLogger("MainWindow")
@@ -36,14 +34,18 @@ class PetWindow(QWidget):
         self.pixmap_cache = {}
         self.scaled_pixmap_cache = {}
         self._initial_pos_set = False
+        self.available_emotions_lower_set = {
+            e.lower()
+            for e in (available_emotions if available_emotions else ["default"])
+        }
         self.available_emotions_for_test = (
             available_emotions if available_emotions else ["default"]
         )
         self.pet_size_preference = "medium"
-        self.config_manager = self.app_context.config_manager # app_context.config_manager 应该在此时可用
-        self.agent_core = self.app_context.agent_core # app_context.agent_core 可能还未完全初始化
+        self.config_manager = self.app_context.config_manager
+        self.agent_core = self.app_context.agent_core
         self.is_agent_mode_active_internal = False
-        if self.agent_core: # agent_core 的状态确定方式保持不变
+        if self.agent_core:
             if hasattr(self.agent_core, "is_agent_mode_active"):
                 self.is_agent_mode_active_internal = (
                     self.agent_core.is_agent_mode_active
@@ -52,18 +54,18 @@ class PetWindow(QWidget):
                 logger.warning(
                     "AgentCore provided but 'is_agent_mode_active' attribute not found. Defaulting to False."
                 )
-                self.is_agent_mode_active_internal = False
-        
-        # 初始化屏幕截图分析的运行时状态，此时仅根据配置文件
-        # 我们假设如果配置为True, ScreenAnalyzer 稍后会被 ApplicationContext 创建
-        self.is_screen_analysis_runtime_active = False # 默认值
+        self.is_screen_analysis_runtime_active = False
         if self.config_manager:
-            self.is_screen_analysis_runtime_active = self.config_manager.get_screen_analysis_enabled()
-            logger.info(f"根据配置文件，屏幕截图分析初始期望状态: {self.is_screen_analysis_runtime_active}")
+            self.is_screen_analysis_runtime_active = (
+                self.config_manager.get_screen_analysis_enabled()
+            )
+            logger.info(
+                f"根据配置文件，屏幕截图分析初始期望状态: {self.is_screen_analysis_runtime_active}"
+            )
         else:
-            logger.warning("ConfigManager 未初始化，无法确定屏幕截图分析的初始期望状态。默认为禁用。")
-            self.is_screen_analysis_runtime_active = False
-
+            logger.warning(
+                "ConfigManager 未初始化，无法确定屏幕截图分析的初始期望状态。默认为禁用。"
+            )
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -143,6 +145,25 @@ class PetWindow(QWidget):
         self.set_speech_text(text)
         self.set_emotion(emotion)
 
+    def _load_raw_pixmap_from_path(
+        self, image_path: str
+    ) -> tuple[QPixmap | None, str | None]:
+        """Loads a QPixmap from cache or file, returning the pixmap and the path used."""
+        if image_path in self.pixmap_cache:
+            return self.pixmap_cache[image_path], image_path
+        if os.path.exists(image_path):
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                self.pixmap_cache[image_path] = pixmap
+                return pixmap, image_path
+            else:
+                logger.warning(
+                    f"Failed to load pixmap (isNull) from path: {image_path}"
+                )
+        else:
+            logger.warning(f"Image path does not exist: {image_path}")
+        return None, None
+
     def set_emotion(self, emotion_name: str, initial_image_path_override: str = None):
         if not emotion_name or not isinstance(emotion_name, str):
             emotion_name = "default"
@@ -155,23 +176,9 @@ class PetWindow(QWidget):
             target_image_path = os.path.join(
                 self.assets_base_path, f"{self.current_emotion}.png"
             )
-        if target_image_path in self.pixmap_cache:
-            raw_pixmap = self.pixmap_cache[target_image_path]
-            actual_image_path_used_for_raw_pixmap = target_image_path
-        elif os.path.exists(target_image_path):
-            pixmap = QPixmap(target_image_path)
-            if not pixmap.isNull():
-                self.pixmap_cache[target_image_path] = pixmap
-                raw_pixmap = pixmap
-                actual_image_path_used_for_raw_pixmap = target_image_path
-            else:
-                logger.warning(
-                    f"Failed to load pixmap for emotion '{self.current_emotion}' from path: {target_image_path}"
-                )
-        else:
-            logger.warning(
-                f"Image path for emotion '{self.current_emotion}' does not exist: {target_image_path}"
-            )
+        raw_pixmap, actual_image_path_used_for_raw_pixmap = (
+            self._load_raw_pixmap_from_path(target_image_path)
+        )
         if raw_pixmap is None and self.current_emotion != "default":
             logger.debug(
                 f"Emotion '{self.current_emotion}' image not found, trying 'default'."
@@ -179,25 +186,9 @@ class PetWindow(QWidget):
             default_image_path_for_fallback = os.path.join(
                 self.assets_base_path, "default.png"
             )
-            if default_image_path_for_fallback in self.pixmap_cache:
-                raw_pixmap = self.pixmap_cache[default_image_path_for_fallback]
-                actual_image_path_used_for_raw_pixmap = default_image_path_for_fallback
-            elif os.path.exists(default_image_path_for_fallback):
-                pixmap = QPixmap(default_image_path_for_fallback)
-                if not pixmap.isNull():
-                    self.pixmap_cache[default_image_path_for_fallback] = pixmap
-                    raw_pixmap = pixmap
-                    actual_image_path_used_for_raw_pixmap = (
-                        default_image_path_for_fallback
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to load default pixmap from path: {default_image_path_for_fallback}"
-                    )
-            else:
-                logger.warning(
-                    f"Default image path does not exist: {default_image_path_for_fallback}"
-                )
+            raw_pixmap, actual_image_path_used_for_raw_pixmap = (
+                self._load_raw_pixmap_from_path(default_image_path_for_fallback)
+            )
         scaled_pixmap = None
         if raw_pixmap and not raw_pixmap.isNull():
             try:
@@ -356,33 +347,35 @@ class PetWindow(QWidget):
                 self.set_speech_text("")
 
     def _toggle_agent_mode(self, checked: bool):
-        # agent_core 应该在 ApplicationContext.initialize_async_services() 中初始化
-        # 比 PetWindow 的创建要早，所以此时 self.app_context.agent_core 应该是最终状态
-        if self.app_context.agent_core: # 确保 agent_core 确实存在
+        if self.app_context.agent_core:
             self.app_context.agent_core.set_agent_mode(checked)
             self.is_agent_mode_active_internal = checked
             self.agent_mode_toggled_signal.emit(checked)
             if checked:
-                self.set_speech_text("Agent模式已开启") 
+                self.set_speech_text("Agent模式已开启")
                 agent_mode_emotion = "default"
-                if self.config_manager: 
+                if self.config_manager:
                     agent_emotions_config = self.config_manager.config.get(
-                        "PET", "AGENT_MODE_EMOTIONS", fallback="neutral, focused, helpful"
+                        "PET",
+                        "AGENT_MODE_EMOTIONS",
+                        fallback="neutral, focused, helpful",
                     )
                     preferred_agent_emotions = [
                         e.strip().lower() for e in agent_emotions_config.split(",")
                     ]
-                    if "focused" in preferred_agent_emotions and "focused" in [
-                        e.lower() for e in self.available_emotions_for_test
-                    ]:
+                    if (
+                        "focused" in preferred_agent_emotions
+                        and "focused" in self.available_emotions_lower_set
+                    ):
                         agent_mode_emotion = "focused"
-                    elif "neutral" in preferred_agent_emotions and "neutral" in [
-                        e.lower() for e in self.available_emotions_for_test
-                    ]:
+                    elif (
+                        "neutral" in preferred_agent_emotions
+                        and "neutral" in self.available_emotions_lower_set
+                    ):
                         agent_mode_emotion = "neutral"
                 self.set_emotion(agent_mode_emotion)
             else:
-                self.set_speech_text("Agent模式已关闭") 
+                self.set_speech_text("Agent模式已关闭")
                 self.set_emotion("default")
             logger.info(f"Agent模式切换为: {checked}")
         else:
@@ -390,15 +383,13 @@ class PetWindow(QWidget):
                 "尝试切换Agent模式失败，AgentCore模块不可用 (self.app_context.agent_core is None)。"
             )
             self.set_speech_text("Agent核心模块不可用。")
-            self.is_agent_mode_active_internal = False # 确保内部状态同步
+            self.is_agent_mode_active_internal = False
             if hasattr(self, "agent_mode_action_in_menu"):
                 self.agent_mode_action_in_menu.setChecked(False)
                 self.agent_mode_action_in_menu.setEnabled(False)
 
-
     def _toggle_runtime_screen_analysis(self, checked: bool):
-        # 此处 self.app_context.screen_analyzer 应该是 ApplicationContext 初始化后的最终状态
-        if self.app_context.screen_analyzer: 
+        if self.app_context.screen_analyzer:
             if checked:
                 self.app_context.screen_analyzer.start_monitoring()
                 self.set_speech_text("屏幕分析已启用")
@@ -411,12 +402,13 @@ class PetWindow(QWidget):
                 self.is_screen_analysis_runtime_active = False
         else:
             self.set_speech_text("屏幕分析模块不可用。")
-            logger.warning("尝试切换屏幕分析状态，但ScreenAnalyzer模块不可用 (self.app_context.screen_analyzer is None)。")
-            self.is_screen_analysis_runtime_active = False 
-            if hasattr(self, 'screen_analysis_action_in_menu'):
-                self.screen_analysis_action_in_menu.setChecked(False) 
-                self.screen_analysis_action_in_menu.setEnabled(False) 
-
+            logger.warning(
+                "尝试切换屏幕分析状态，但ScreenAnalyzer模块不可用 (self.app_context.screen_analyzer is None)。"
+            )
+            self.is_screen_analysis_runtime_active = False
+            if hasattr(self, "screen_analysis_action_in_menu"):
+                self.screen_analysis_action_in_menu.setChecked(False)
+                self.screen_analysis_action_in_menu.setEnabled(False)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -445,59 +437,33 @@ class PetWindow(QWidget):
         size_action_group.addAction(large_action)
         size_menu.addAction(large_action)
         menu.addSeparator()
-
-        # Agent模式切换
         self.agent_mode_action_in_menu = QAction("Agent模式 (实验性)", self)
         self.agent_mode_action_in_menu.setCheckable(True)
-        # 在contextMenuEvent被调用时，self.app_context.agent_core 应该是其最终状态
-        if self.app_context.agent_core: 
+        if self.app_context.agent_core:
             self.agent_mode_action_in_menu.setChecked(
-                self.is_agent_mode_active_internal 
+                self.is_agent_mode_active_internal
             )
             self.agent_mode_action_in_menu.triggered.connect(self._toggle_agent_mode)
         else:
             self.agent_mode_action_in_menu.setText("Agent模式 (不可用)")
             self.agent_mode_action_in_menu.setEnabled(False)
-            self.is_agent_mode_active_internal = False # 如果不可用，同步内部状态
         menu.addAction(self.agent_mode_action_in_menu)
-
-        # 屏幕截图分析运行时切换
         self.screen_analysis_action_in_menu = QAction("启用屏幕截图分析", self)
         self.screen_analysis_action_in_menu.setCheckable(True)
-
-        # 在contextMenuEvent被调用时，self.app_context.screen_analyzer 应该是其最终状态
         if self.app_context.screen_analyzer:
-            # 勾选状态基于 PetWindow 内部维护的 is_screen_analysis_runtime_active,
-            # 其初始值来自配置文件。
-            self.screen_analysis_action_in_menu.setChecked(self.is_screen_analysis_runtime_active)
-            self.screen_analysis_action_in_menu.triggered.connect(self._toggle_runtime_screen_analysis)
+            self.screen_analysis_action_in_menu.setChecked(
+                self.is_screen_analysis_runtime_active
+            )
+            self.screen_analysis_action_in_menu.triggered.connect(
+                self._toggle_runtime_screen_analysis
+            )
             self.screen_analysis_action_in_menu.setEnabled(True)
         else:
-            # 如果 ScreenAnalyzer 模块最终没有被 ApplicationContext 创建成功
             self.screen_analysis_action_in_menu.setText("屏幕截图分析 (不可用)")
-            self.screen_analysis_action_in_menu.setChecked(False) 
+            self.screen_analysis_action_in_menu.setChecked(False)
             self.screen_analysis_action_in_menu.setEnabled(False)
-            # 确保 PetWindow 的内部状态也反映模块不可用
-            self.is_screen_analysis_runtime_active = False
             logger.debug("右键菜单：ScreenAnalyzer 模块不可用，屏幕分析选项已禁用。")
-
         menu.addAction(self.screen_analysis_action_in_menu)
-        
-        menu.addSeparator() 
-
-        testable_emotions = self.available_emotions_for_test
-        emotion_menu = menu.addMenu("测试情绪")
-        if testable_emotions:
-            for em in sorted(testable_emotions):
-                action = QAction(em.capitalize(), self)
-                action.triggered.connect(
-                    lambda checked=False, emotion_name_for_lambda=em: self.set_emotion(
-                        emotion_name_for_lambda
-                    )
-                )
-                emotion_menu.addAction(action)
-        else:
-            emotion_menu.addAction("无可用情绪").setEnabled(False)
         menu.addSeparator()
         exit_action = menu.addAction("退出程序")
         exit_action.triggered.connect(QApplication.instance().quit)

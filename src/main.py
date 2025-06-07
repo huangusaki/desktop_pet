@@ -8,12 +8,14 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QGuiApplication
 from PIL import Image
 from src.utils.application_context import ApplicationContext
+from pathlib import Path
 import logging
 
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.multimedia.ffmpeg=false"
 logger = logging.getLogger("main")
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
+script_file_path = Path(__file__).resolve()
+project_root = str(script_file_path.parent)
+project_root = str(Path(__file__).resolve().parent.parent)
 context: Optional[ApplicationContext] = None
 
 

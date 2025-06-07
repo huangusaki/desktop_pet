@@ -483,23 +483,3 @@ class ConfigManager:
 
     def get_project_root(self):
         return self.project_root
-
-    def get_hierarchical_summary_level_description(self, level_name: str) -> str:
-        section = "HIERARCHICAL_SUMMARY_DESCRIPTIONS"
-        config_key = f"{level_name.upper()}_DESC"
-        default_descriptions = {
-            "L0_keywords": "逗号分隔的3-5个与主题最相关的核心关键词/短语",
-            "L1_core_sentence": "一句（不超过25字）高度精炼的核心摘要，准确点明主题在此聊天中的最主要内容或结论。",
-            "L2_paragraph": "一段（约50-100字）的摘要，对核心句进行扩展，提供必要的上下文、主要论点或事件的简要过程。",
-            "L3_details_list": "一个包含2-4个关键具体信息点的列表。每个点都应该是独立的短语或句子，提供支持核心摘要的具体细节、例子或数据。如果聊天记录中没有足够的不同细节支持列表，可以减少条目数量，甚至为空列表 []。",
-        }
-        default_fallback_text = default_descriptions.get(
-            level_name, f"{level_name}的描述未在配置文件或默认值中定义"
-        )
-        if self.config.has_option(section, config_key):
-            return self.config.get(section, config_key, fallback=default_fallback_text)
-        else:
-            logger.warning(
-                f"在配置文件 [{section}] 中未找到键 '{config_key}'，将使用默认描述（如果存在）。"
-            )
-            return default_fallback_text

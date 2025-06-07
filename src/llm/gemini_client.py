@@ -186,7 +186,7 @@ class GeminiClient:
                 and self.thinking_budget > 0
             ):
                 generation_config_args["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=self.thinking_budget, include_thoughts=True
+                    thinking_budget=self.thinking_budget, include_thoughts=False
                 )
             api_config = (
                 types.GenerateContentConfig(**generation_config_args)
@@ -280,7 +280,7 @@ class GeminiClient:
                 vision_config_args["tools"] = self.enabled_tools
             if self.thinking_budget is not None and self.thinking_budget > 0:
                 vision_config_args["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=self.thinking_budget, include_thoughts=True
+                    thinking_budget=self.thinking_budget, include_thoughts=False
                 )
             api_vision_config = (
                 types.GenerateContentConfig(**vision_config_args)
@@ -405,7 +405,7 @@ class GeminiClient:
                 multimodal_config_args["tools"] = self.enabled_tools
             if self.thinking_budget is not None and self.thinking_budget > 0:
                 multimodal_config_args["thinking_config"] = types.ThinkingConfig(
-                    thinking_budget=self.thinking_budget, include_thoughts=True
+                    thinking_budget=self.thinking_budget, include_thoughts=False
                 )
             api_multimodal_config = (
                 types.GenerateContentConfig(**multimodal_config_args)

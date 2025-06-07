@@ -115,50 +115,14 @@ class ChatDialog(QDialog):
                     logger.warning(
                         f"Warning: Could not create avatar cache directory: {self.avatar_cache_dir}. Error: {e}"
                     )
-        self.is_pet_avatar_processed_by_pillow = False
-        self.is_user_avatar_processed_by_pillow = False
-        path_for_pet_qurl = self.original_pet_avatar_path
-        if (
-            PILLOW_AVAILABLE
-            and self.original_pet_avatar_path
-            and os.path.exists(self.original_pet_avatar_path)
-        ):
-            processed_path = self._process_avatar_to_circular_original_res(
-                self.original_pet_avatar_path
+        self.pet_avatar_qurl, self.is_pet_avatar_processed_by_pillow = (
+            self._initialize_avatar_qurl_and_flag(self.original_pet_avatar_path, "pet")
+        )
+        self.user_avatar_qurl, self.is_user_avatar_processed_by_pillow = (
+            self._initialize_avatar_qurl_and_flag(
+                self.original_user_avatar_path, "user"
             )
-            if processed_path:
-                path_for_pet_qurl = processed_path
-                self.is_pet_avatar_processed_by_pillow = True
-            else:
-                logger.warning(
-                    f"Pillow (original res) processing failed for pet avatar, using original: {self.original_pet_avatar_path}"
-                )
-        self.pet_avatar_qurl = ""
-        if path_for_pet_qurl and os.path.exists(path_for_pet_qurl):
-            self.pet_avatar_qurl = QUrl.fromLocalFile(
-                os.path.abspath(path_for_pet_qurl)
-            ).toString()
-        path_for_user_qurl = self.original_user_avatar_path
-        if (
-            PILLOW_AVAILABLE
-            and self.original_user_avatar_path
-            and os.path.exists(self.original_user_avatar_path)
-        ):
-            processed_path = self._process_avatar_to_circular_original_res(
-                self.original_user_avatar_path
-            )
-            if processed_path:
-                path_for_user_qurl = processed_path
-                self.is_user_avatar_processed_by_pillow = True
-            else:
-                logger.warning(
-                    f"Pillow (original res) processing failed for user avatar, using original: {self.original_user_avatar_path}"
-                )
-        self.user_avatar_qurl = ""
-        if path_for_user_qurl and os.path.exists(path_for_user_qurl):
-            self.user_avatar_qurl = QUrl.fromLocalFile(
-                os.path.abspath(path_for_user_qurl)
-            ).toString()
+        )
         transparent_pixmap = QPixmap(1, 1)
         transparent_pixmap.fill(Qt.GlobalColor.transparent)
         self.setWindowIcon(QIcon(transparent_pixmap))
@@ -227,6 +191,41 @@ class ChatDialog(QDialog):
         self._is_closing = False
         self.staged_files: List[Dict[str, Any]] = []
         self._update_window_title_and_placeholder()
+
+    def _initialize_avatar_qurl_and_flag(
+        self, image_path: str, avatar_type_for_log: str
+    ) -> tuple[str, bool]:
+        """
+        初始化头像的QURL字符串和Pillow处理标志。
+        Args:
+            image_path: 原始图片路径。
+            avatar_type_for_log: 头像类型（例如 "pet", "user"），用于日志记录。
+        Returns:
+            一个元组 (qurl_string, is_processed_by_pillow)。
+        """
+        qurl_string = ""
+        is_processed_by_pillow = False
+        path_for_qurl = image_path
+        if PILLOW_AVAILABLE and image_path and os.path.exists(image_path):
+            processed_path = self._process_avatar_to_circular_original_res(image_path)
+            if processed_path:
+                path_for_qurl = processed_path
+                is_processed_by_pillow = True
+            else:
+                logger.warning(
+                    f"Pillow (original res) processing failed for {avatar_type_for_log} avatar, using original: {image_path}"
+                )
+        if path_for_qurl and os.path.exists(path_for_qurl):
+            qurl_string = QUrl.fromLocalFile(os.path.abspath(path_for_qurl)).toString()
+        return qurl_string, is_processed_by_pillow
+
+    def _set_input_active(self, active: bool):
+        """设置输入相关控件的激活状态。"""
+        self.send_button.setEnabled(active)
+        self.input_field.setEnabled(active)
+        self.attach_button.setEnabled(active)
+        if active:
+            self.input_field.setFocus()
 
     def set_agent_mode_active(self, active: bool):
         self.is_agent_mode_active_chat = active
@@ -325,13 +324,7 @@ class ChatDialog(QDialog):
         if self.async_thread is finished_thread:
             self.async_thread = None
         if not self._is_closing:
-            if not self.send_button.isEnabled():
-                self.send_button.setEnabled(True)
-            if not self.input_field.isEnabled():
-                self.input_field.setEnabled(True)
-                self.input_field.setFocus()
-            if not self.attach_button.isEnabled():
-                self.attach_button.setEnabled(True)
+            self._set_input_active(True)
 
     def _handle_attach_file_dialog(self):
         file_filter = "媒体文件 (*.png *.jpg *.jpeg *.gif *.webp *.mp3 *.wav *.m4a *.ogg);;所有文件 (*)"
@@ -494,9 +487,7 @@ class ChatDialog(QDialog):
             )
         )
         self.async_thread = current_task_thread
-        self.send_button.setEnabled(False)
-        self.input_field.setEnabled(False)
-        self.attach_button.setEnabled(False)
+        self._set_input_active(False)
         self.async_thread.start()
         self.staged_files.clear()
         self._update_staged_files_ui()
@@ -617,10 +608,7 @@ class ChatDialog(QDialog):
                 "Dialog is closing. Skipping internal UI updates for this response."
             )
         else:
-            self.send_button.setEnabled(True)
-            self.input_field.setEnabled(True)
-            self.attach_button.setEnabled(True)
-            self.input_field.setFocus()
+            self._set_input_active(True)
             self._add_message_to_display(self.pet_name, pet_text, is_user=False)
         if current_thread and current_thread.isRunning():
             current_thread.quit()
@@ -638,10 +626,7 @@ class ChatDialog(QDialog):
                 f"Dialog is closing. Skipping internal UI updates for this failure: {error_message}"
             )
         else:
-            self.send_button.setEnabled(True)
-            self.input_field.setEnabled(True)
-            self.attach_button.setEnabled(True)
-            self.input_field.setFocus()
+            self._set_input_active(True)
             logger.error(f"Async task failed: {error_message}")
             self._add_message_to_display(
                 self.pet_name, f"发生错误: {error_message}", is_user=False
@@ -732,13 +717,10 @@ class ChatDialog(QDialog):
                 no_history_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>还没有和 {self.pet_name} 的聊天记录。</i></div>"
                 self.chat_display.setHtml(no_history_html)
         self.input_field.clear()
-        self.send_button.setEnabled(True)
-        self.input_field.setEnabled(True)
-        self.attach_button.setEnabled(True)
+        self._set_input_active(True)
         self.show()
         self.activateWindow()
         self.raise_()
-        self.input_field.setFocus()
 
     def _close_dialog_actions(self):
         if self._is_closing:
