@@ -94,7 +94,6 @@ class ScreenAnalysisWorker(QObject):
                 loop.stop()
 
     async def _async_grab_and_process_llm_with_timeout(self):
-        """包装器方法，使用 asyncio.wait_for 实现超时。"""
         if not self.config_manager:
             logger.error(
                 "ScreenAnalysisWorker: ConfigManager is None, cannot get timeout."
@@ -135,11 +134,10 @@ class ScreenAnalysisWorker(QObject):
                 return
             original_screenshot = await asyncio.to_thread(ImageGrab.grab)
             screenshot_taken_successfully = True
-            self.request_gui_show_after_grab.emit()
         except Exception as e_grab:
             logger.error(f"Error during ImageGrab.grab(): {e_grab}", exc_info=True)
         finally:
-            pass
+            self.request_gui_show_after_grab.emit()
         if (
             not self._is_running
             or not screenshot_taken_successfully
@@ -177,14 +175,14 @@ class ScreenAnalysisWorker(QObject):
 
 class ScreenAnalyzer(QObject):
     pet_reaction_ready = pyqtSignal(str, str, str)
-    ready_for_worker_grab = pyqtSignal()
+    request_pet_hide = pyqtSignal()
+    request_pet_show = pyqtSignal()
 
     def __init__(
         self,
         gemini_client: Any,
         prompt_builder: PromptBuilder,
         config_manager: Any,
-        pet_window: Any,
         pet_name: str,
         user_name: str,
         available_emotions: List[str],
@@ -193,12 +191,10 @@ class ScreenAnalyzer(QObject):
         super().__init__(parent)
         self.gemini_client = gemini_client
         self.config_manager = config_manager
-        self.pet_window = pet_window
         self.prompt_builder = prompt_builder
         self.pet_name = pet_name
         self.user_name = user_name
         self.available_emotions_list = available_emotions
-        self._pet_was_visible_before_grab = False
         self._is_enabled = False
         self._analysis_chance = 0.1
         self.tts_enabled_globally = False
@@ -241,15 +237,26 @@ class ScreenAnalyzer(QObject):
             f"Config: 屏幕截图={self._is_enabled}, 最小触发时间={min_interval_seconds}s,最大触发时间={max_interval_seconds}s, 触发概率={self._analysis_chance*100}%, TTS开启状态={self.tts_enabled_globally}"
         )
 
+    @pyqtSlot(bool)
+    def set_monitoring_state(self, enabled: bool):
+        """Public slot to turn monitoring on or off."""
+        self._is_enabled = enabled
+        if enabled:
+            self.start_monitoring()
+            logger.info("Screen analysis monitoring enabled via external request.")
+        else:
+            self.stop_monitoring()
+            logger.info("Screen analysis monitoring disabled via external request.")
+
     def start_monitoring(self):
         if not self._is_enabled:
             logger.info(
-                "Screen analysis monitoring not started (feature disabled). TTS can still be triggered by chat."
+                "Screen analysis monitoring not started (feature disabled in config). TTS can still be triggered by chat."
             )
             return
-        if not self.gemini_client or not self.pet_window:
+        if not self.gemini_client:
             logger.warning(
-                "Cannot start screen analysis monitoring, Gemini client or PetWindow not available."
+                "Cannot start screen analysis monitoring, Gemini client not available."
             )
             return
         initial_interval_ms = random.randint(
@@ -259,7 +266,6 @@ class ScreenAnalyzer(QObject):
 
     def stop_monitoring(self):
         self.timer.stop()
-        logger.info("准备关闭屏幕监控线程...")
         if self.analysis_thread and self.analysis_thread.isRunning():
             if self.analysis_worker:
                 self.analysis_worker.stop()
@@ -282,7 +288,9 @@ class ScreenAnalyzer(QObject):
         self._cleanup_tts_request_thread_and_worker()
         self.tts_queue.clear()
         self.is_tts_processing = False
-        logger.info("屏幕监控线程关闭, TTS队列已清理")
+        logger.info(
+            "Screen monitoring stopped, threads cleaned up, and TTS queue cleared."
+        )
 
     def _check_and_analyze_wrapper(self):
         if not self._is_enabled:
@@ -291,27 +299,27 @@ class ScreenAnalyzer(QObject):
         should_analyze = random.random() < self._analysis_chance
         if should_analyze:
             if self.analysis_thread and self.analysis_thread.isRunning():
-                logger.info("屏幕分析线程运行中，跳过本次任务")
+                logger.info(
+                    "Screen analysis thread is already running, skipping this cycle."
+                )
             else:
-                logger.debug(f"开始屏幕分析")
+                logger.debug("Triggering screen analysis sequence.")
                 self._initiate_analysis_sequence()
         else:
-            logger.debug(f"跳过本次屏幕分析任务")
+            logger.debug("Skipping screen analysis this cycle due to chance.")
         if self.timer.isActive():
-            next_interval_ms = self._min_interval_ms
             next_interval_ms = random.randint(
                 self._min_interval_ms, self._max_interval_ms
             )
             self.timer.setInterval(next_interval_ms)
 
     def _initiate_analysis_sequence(self):
-        if self.analysis_thread:
-            self._cleanup_analysis_thread_and_worker()
         if self.analysis_thread and self.analysis_thread.isRunning():
             logger.warning(
-                "Attempted to initiate analysis while a thread was still unexpectedly running."
+                "Attempted to initiate analysis while a thread was still running."
             )
             return
+        self._cleanup_analysis_thread_and_worker()
         self.analysis_worker = ScreenAnalysisWorker(
             gemini_client=self.gemini_client,
             prompt_builder=self.prompt_builder,
@@ -323,14 +331,13 @@ class ScreenAnalyzer(QObject):
         self.analysis_thread = QThread()
         self.analysis_worker.moveToThread(self.analysis_thread)
         self.analysis_worker.request_gui_hide_before_grab.connect(
-            self._handle_hide_request
+            self._on_worker_requests_hide
         )
         self.analysis_worker.request_gui_show_after_grab.connect(
-            self._handle_show_request
+            self._on_worker_requests_show
         )
         self.analysis_worker.analysis_complete.connect(self._handle_llm_response)
         self.analysis_worker.error_occurred.connect(self._handle_screen_worker_error)
-        self.ready_for_worker_grab.connect(self.analysis_worker.gui_is_ready_for_grab)
         self.analysis_thread.started.connect(
             self.analysis_worker.start_screenshot_sequence
         )
@@ -338,24 +345,16 @@ class ScreenAnalyzer(QObject):
         self.analysis_thread.start()
 
     @pyqtSlot()
-    def _handle_hide_request(self):
-        if self.pet_window:
-            self._pet_was_visible_before_grab = self.pet_window.isVisible()
-            if self._pet_was_visible_before_grab:
-                self.pet_window.setWindowOpacity(0.05)
-                QApplication.processEvents()
-        self.ready_for_worker_grab.emit()
+    def _on_worker_requests_hide(self):
+        """Catches the signal from the worker and re-emits it for the ApplicationContext."""
+        self.request_pet_hide.emit()
+        if self.analysis_worker:
+            self.analysis_worker.gui_is_ready_for_grab.emit()
 
     @pyqtSlot()
-    def _handle_show_request(self):
-        if self.pet_window:
-            if self._pet_was_visible_before_grab:
-                self.pet_window.setWindowOpacity(1.0)
-                if not self.pet_window.isVisible():
-                    self.pet_window.show()
-                self.pet_window.activateWindow()
-                self.pet_window.raise_()
-                QApplication.processEvents()
+    def _on_worker_requests_show(self):
+        """Catches the signal from the worker and re-emits it."""
+        self.request_pet_show.emit()
 
     @pyqtSlot(dict)
     def _handle_llm_response(self, response_data: Dict[str, Any]):
@@ -493,6 +492,8 @@ class ScreenAnalyzer(QObject):
         except Exception as e:
             logger.error(f"Error handling audio playback: {e}", exc_info=True)
             self._delete_temp_file(self._temp_audio_file_path)
+            self.is_tts_processing = False
+            self._try_process_next_tts_in_queue()
 
     def _handle_media_status_changed(self, status: QMediaPlayer.MediaStatus):
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
@@ -505,12 +506,16 @@ class ScreenAnalyzer(QObject):
                 )
             else:
                 self._temp_audio_file_path = None
+            self.is_tts_processing = False
+            self._try_process_next_tts_in_queue()
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
             logger.error(
                 f"QMediaPlayer: Invalid media. Source was: {self.player.source().toString()}"
             )
             self.player.setSource(QUrl())
             self._delete_temp_file(self._temp_audio_file_path)
+            self.is_tts_processing = False
+            self._try_process_next_tts_in_queue()
 
     def _delete_temp_file(self, file_path: Optional[str]):
         if file_path and os.path.exists(file_path):
@@ -531,18 +536,13 @@ class ScreenAnalyzer(QObject):
         )
         self.player.setSource(QUrl())
         self._delete_temp_file(self._temp_audio_file_path)
+        self.is_tts_processing = False
+        self._try_process_next_tts_in_queue()
 
     @pyqtSlot(str)
     def _handle_screen_worker_error(self, error_message: str):
         logger.error(f"ScreenAnalysisWorker Error - {error_message}")
-        if self.pet_window and self.pet_window.windowOpacity() < 1.0:
-            if self._pet_was_visible_before_grab:
-                self.pet_window.setWindowOpacity(1.0)
-                if not self.pet_window.isVisible():
-                    self.pet_window.show()
-                self.pet_window.activateWindow()
-                self.pet_window.raise_()
-                QApplication.processEvents()
+        self.request_pet_show.emit()
         if self.analysis_thread and self.analysis_thread.isRunning():
             self.analysis_thread.quit()
         else:
@@ -550,46 +550,16 @@ class ScreenAnalyzer(QObject):
 
     def _cleanup_analysis_thread_and_worker(self):
         if self.analysis_worker:
-            try:
-                self.analysis_worker.request_gui_hide_before_grab.disconnect(
-                    self._handle_hide_request
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.analysis_worker.request_gui_show_after_grab.disconnect(
-                    self._handle_show_request
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.analysis_worker.analysis_complete.disconnect(
-                    self._handle_llm_response
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.analysis_worker.error_occurred.disconnect(
-                    self._handle_screen_worker_error
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.ready_for_worker_grab.disconnect(
-                    self.analysis_worker.gui_is_ready_for_grab
-                )
-            except (TypeError, RuntimeError):
-                pass
+            self.analysis_worker.request_gui_hide_before_grab.disconnect()
+            self.analysis_worker.request_gui_show_after_grab.disconnect()
+            self.analysis_worker.analysis_complete.disconnect()
+            self.analysis_worker.error_occurred.disconnect()
             self.analysis_worker.deleteLater()
             self.analysis_worker = None
         if self.analysis_thread:
             if self.analysis_thread.isRunning():
-                logger.debug("Cleaning up running analysis_thread.")
                 self.analysis_thread.quit()
                 if not self.analysis_thread.wait(1500):
-                    logger.warning(
-                        "Analysis thread did not quit gracefully in _cleanup, terminating."
-                    )
                     self.analysis_thread.terminate()
                     self.analysis_thread.wait()
             self.analysis_thread.deleteLater()
@@ -597,37 +567,18 @@ class ScreenAnalyzer(QObject):
 
     def _cleanup_tts_request_thread_and_worker(self):
         if self.tts_request_worker:
-            try:
-                self.tts_request_worker.audio_ready.disconnect(
-                    self._handle_audio_playback
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.tts_request_worker.tts_error.disconnect(
-                    self._handle_tts_request_error_queued
-                )
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.tts_request_worker.finished.disconnect(
-                    self._handle_tts_worker_finished_queued
-                )
-            except (TypeError, RuntimeError):
-                pass
+            self.tts_request_worker.audio_ready.disconnect()
+            self.tts_request_worker.tts_error.disconnect()
+            self.tts_request_worker.finished.disconnect()
             self.tts_request_worker.deleteLater()
             self.tts_request_worker = None
         if self.tts_request_thread:
             if self.tts_request_thread.isRunning():
-                logger.debug("Cleaning up running tts_request_thread.")
                 self.tts_request_thread.quit()
                 if not self.tts_request_thread.wait(500):
-                    logger.warning(
-                        "TTS request thread did not quit gracefully in _cleanup, terminating."
-                    )
                     self.tts_request_thread.terminate()
                     self.tts_request_thread.wait()
             self.tts_request_thread.deleteLater()
             self.tts_request_thread = None
         self.is_tts_processing = False
-        QTimer.singleShot(0, self._try_process_next_tts_in_queue)
+        QTimer.singleShot(50, self._try_process_next_tts_in_queue)

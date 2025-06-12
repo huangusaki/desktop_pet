@@ -2,17 +2,21 @@ from typing import List, Dict, Any, Tuple, Optional
 from ..utils.config_manager import ConfigManager
 import logging
 import datetime
+from ..data.relationship_manager import RelationshipManager
 
 logger = logging.getLogger("PromptBuilder")
 
 
 class PromptBuilder:
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(
+        self, config_manager: ConfigManager, relationship_manager: RelationshipManager
+    ):
         self.config_manager = config_manager
+        self.relationship_manager = relationship_manager
         self.available_tones = self.config_manager.get_tts_available_tones()
         self.default_tone = self.config_manager.get_tts_default_tone()
-        self.pet_name=self.config_manager.get_pet_name()
-        self.user_name=self.config_manager.get_user_name()
+        self.pet_name = self.config_manager.get_pet_name()
+        self.user_name = self.config_manager.get_user_name()
 
     def _get_formatted_screen_analysis_log_content(
         self,
@@ -86,6 +90,7 @@ class PromptBuilder:
                     sender_val = msg_entry.get("sender")
                     text_content = msg_entry.get("message_text", "")
                     timestamp_unix = msg_entry.get("timestamp")
+                    formatted_time_prefix = ""
                     if timestamp_unix:
                         try:
                             dt_object = datetime.datetime.fromtimestamp(
@@ -128,14 +133,32 @@ class PromptBuilder:
     ) -> str:
         emotions_str = ", ".join(f"'{e}'" for e in available_emotions)
         tones_str = ", ".join(f"'{t}'" for t in self.available_tones)
-        persona_identity = f"你是一名专业的角色扮演专家，你的语言能力无比优秀，表达方式多种多样，接下来，你要扮演{pet_name}跟{user_name}进行对话，你的核心角色设定是：{pet_persona}\n下面是聊天记录：\n\n---------------------------------\n"
+        relationship_prompt_injection = ""
+        if self.relationship_manager:
+            level_info = self.relationship_manager.get_current_relationship_level()
+            if level_info:
+                relationship_prompt_injection = (
+                    f"\n\n## 当前关系状态:\n"
+                    f"你和 {user_name} 的当前关系是 '{level_info['name']}' (好感度分数: {level_info['score']})。\n"
+                    f"态度指导: {level_info['description']}\n"
+                    f"请严格根据这个关系状态来调整你的语气、回应内容以及 `favorability_change` 的取值。\n"
+                )
+                logger.info(
+                    f"Injecting relationship context: Level '{level_info['name']}' with score {level_info['score']}"
+                )
+        persona_identity = (
+            f"你要扮演{pet_name}跟{user_name}进行对话，你的核心角色设定是：{pet_persona}"
+            f"{relationship_prompt_injection}"
+            f"\n下面是聊天记录：\n\n---------------------------------\n"
+        )
         behavioral_rules = f"""\n## 你的回答还应该遵守这些规则：
     1、严格遵守json格式输出规范，特别是think条目的输出要求。
-    2、一定要检查自己的回答，不要复述或总结前面的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，不要一直往某个话题/方向上靠，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
-    3、不要刻意突出人设，严禁提及任何设定里的内容，禁止发送emoji或者表情。
+    2、一定要检查自己的回答，不要复述或总结对方或自己的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，不要一直往某个话题/方向上靠，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
+    3、不要刻意突出人设，不要过度纠结于自己的人设，严禁提及任何设定里的内容，禁止发送emoji或者表情（颜文字可以）。
     4、注意聊天记录的时间，注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理。\n
     5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，不要盲目乐观。
     6、不要拓展到无关话题上，三观要正，对不合适的事要指责。
+    7、回答要口语化、日常化，不要书面化，应该更要有人和人对话的感觉。
 """
         system_instruction_part_A = persona_identity
         formatted_history_string = self._get_formatted_chat_history_content(
@@ -185,18 +208,20 @@ class PromptBuilder:
         )
         json_format_instruction = (
             "\n## attention: The output format is extremely important. Your MUST strictly follow JSON format and ONLY contain a JSON object with no other text or markdown (like ```json or ```) . \nThe target JSON object must include the following keys:\n"
-            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号（包括换行符）。\n"
-            f"text:chinese str,about 50~150 characters,This is what {pet_name} will say to the {user_name}. Remember, {user_name} should not be changed anytime.\n"
-            f"emotion: This is your current emotion. the value MUST be one of the following predefined emotions (do not change the values): [{emotions_str}].\n"
-            f"tone: This is the tone of your voice for TTS. The value MUST be one of the following: {tones_str}. Default to '{self.default_tone}' if unsure.\n"
-            f"text_japanese:japanese str, the original Japanese of the content in the 'text' field.\n"
+            f"think: {pet_name}解读当前对话和上下文的主视角，基于要求从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号。\n"
+            f"text:中文字符串，0~100个字符长度\n"
+            f"emotion: 体现你回答时的心情，值只能是以下选项中的一个: [{emotions_str}]\n"
+            f"tone: 你觉得你的回答应该使用的语调，值只能是以下选项中的一个: [{tones_str}]\n"
+            "favorability_change: 整数，表示这次对话对你好感度的影响,请将变化值控制在 -20 到 20 之间。\n"
+            f"text_japanese:日语字符串，一般是text项的翻译\n"
             "JSON output example:\n"
             "{\n"
-            f'  "think": "{user_name}正在跟我打招呼，所以我应该基于人设给{user_name}一个合理的回复，回答候选项1：…回答候选项2：…回答候选项3：…这个回答完全符合了所有要求，因此回答…",\n'
-            f'  "text": "Hello there, I am {pet_name}!",\n'
+            f'  "think": "咦？正在跟我打招呼吗？是跟我说话吗？嗯…现在正在讨论的是…哼哼，这样回答好像可以：…这样好像也行：…或者说这样？：…嗯！这个回答很好，所以就回复…（大约1500中文字符）\n'
+            f'  "text": "你好～我是{pet_name}哦!",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "tone": "{self.default_tone}",\n'
-            f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
+            f'  "favorability_change": 1,\n'
+            f'  "text_japanese": "こんにちは、{pet_name}です！"\n'
             "}\n"
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format."
         )
@@ -274,7 +299,7 @@ class PromptBuilder:
     def build_hierarchical_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
-        pet_name=self.pet_name
+        pet_name = self.pet_name
         prompt = (
             f"请根据以下聊天记录片段、相关的时间信息和指定的主题，为这个主题生成一个结构化的层级摘要。\n\n"
             f'聊天记录片段:\n"""\n{text_to_summarize}\n"""\n\n'

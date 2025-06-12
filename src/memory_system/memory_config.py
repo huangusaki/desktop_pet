@@ -36,7 +36,6 @@ class MemoryConfig:
     fast_retrieval_max_keywords: int = 5
     retrieval_input_max_topics: int = 5
     retrieval_input_compress_rate: float = 0.05
-    activation_decay_per_link: float = 0.5
     activation_link_decay_base: float = 0.5
     activation_min_threshold_for_spread: float = 0.1
     retrieval_top_activated_nodes_to_scan: int = 20
@@ -175,9 +174,6 @@ class MemoryConfig:
                 "retrieval_input_compress_rate",
                 cls.retrieval_input_compress_rate,
                 float,
-            ),
-            activation_decay_per_link=get_param_from_cm(
-                "activation_decay_per_link", cls.activation_decay_per_link, float
             ),
             activation_link_decay_base=get_param_from_cm(
                 "activation_link_decay_base", cls.activation_link_decay_base, float

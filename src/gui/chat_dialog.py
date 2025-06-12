@@ -1,5 +1,7 @@
 import html
 import os
+import asyncio
+import sys
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -11,15 +13,13 @@ from PyQt6.QtWidgets import (
     QWidget,
     QFileDialog,
     QLabel,
-    QSizePolicy,
     QScrollArea,
     QFrame,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QThread, QObject, QSize
-from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices
-import asyncio
-import sys
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer
+from PyQt6.QtGui import QIcon, QPixmap
 from typing import Optional, List, Any, Dict
+from ..data.relationship_manager import RelationshipManager
 import logging
 import mimetypes
 
@@ -34,87 +34,59 @@ except ImportError:
 try:
     from ..memory_system.hippocampus_core import HippocampusManager
 except ImportError:
-    try:
-        from memory_system.hippocampus_core import HippocampusManager
-    except ImportError:
-        try:
-            sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
-            from memory_system.hippocampus_core import HippocampusManager
-        except ImportError:
-            logger.critical("CRITICAL: Could not import HippocampusManager.")
-            HippocampusManager = None
+    HippocampusManager = None
 try:
     from ..core.agent_core import AgentCore
 except ImportError:
-    try:
-        from core.agent_core import AgentCore
-    except ImportError:
-        AgentCore = None
-        logger.warning(
-            "ChatDialog: AgentCore could not be imported. Agent mode will be unavailable in chat."
-        )
+    AgentCore = None
+    logger.warning(
+        "ChatDialog: AgentCore could not be imported. Agent mode will be unavailable in chat."
+    )
 DISPLAY_AVATAR_SIZE = 28
 STAGED_FILE_THUMBNAIL_SIZE = 64
-
-
-class AsyncRunner(QObject):
-    task_completed = pyqtSignal(object)
-    task_failed = pyqtSignal(str)
-
-    def __init__(self, coro, parent=None):
-        super().__init__(parent)
-        self.coro = coro
-
-    def run_async_task(self):
-        try:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self.coro)
-            self.task_completed.emit(result)
-        except Exception as e:
-            self.task_failed.emit(str(e))
 
 
 class ChatDialog(QDialog):
     dialog_closed = pyqtSignal()
     speech_and_emotion_received = pyqtSignal(str, str)
     chat_text_for_tts_ready = pyqtSignal(str, str)
+    message_display_data_ready = pyqtSignal(str, str, bool)
 
     def __init__(
         self,
-        application_context: Any,
+        gemini_client: Any,
+        mongo_handler: Optional[Any],
+        config_manager: Any,
+        pet_name: str,
+        user_name: str,
         pet_avatar_path: str,
         user_avatar_path: str,
+        asyncio_helper: Any,
+        hippocampus_manager: Optional[Any] = None,
+        agent_core: Optional[Any] = None,
+        relationship_manager: Optional["RelationshipManager"] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self.context = application_context
-        self.gemini_client = self.context.gemini_client
-        self.mongo_handler = self.context.mongo_handler
-        self.config_manager = self.context.config_manager
-        self.hippocampus_manager = self.context.hippocampus_manager
-        self.agent_core = self.context.agent_core
+        self.gemini_client = gemini_client
+        self.mongo_handler = mongo_handler
+        self.config_manager = config_manager
+        self.hippocampus_manager = hippocampus_manager
+        self.agent_core = agent_core
+        self.asyncio_helper = asyncio_helper
+        self.relationship_manager = relationship_manager
+        self.pet_name = pet_name
+        self.user_name = user_name
         self.is_agent_mode_active_chat = False
         if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
             self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
-        self.user_name = self.config_manager.get_user_name()
-        self.pet_name = self.config_manager.get_pet_name()
         self.current_role_play_character = self.pet_name
         self.original_pet_avatar_path = pet_avatar_path
         self.original_user_avatar_path = user_avatar_path
         self.current_script_dir = os.path.dirname(os.path.abspath(__file__))
         self.avatar_cache_dir = os.path.join(self.current_script_dir, ".avatar_cache")
         if PILLOW_AVAILABLE:
-            if not os.path.exists(self.avatar_cache_dir):
-                try:
-                    os.makedirs(self.avatar_cache_dir, exist_ok=True)
-                except OSError as e:
-                    logger.warning(
-                        f"Warning: Could not create avatar cache directory: {self.avatar_cache_dir}. Error: {e}"
-                    )
+            os.makedirs(self.avatar_cache_dir, exist_ok=True)
         self.pet_avatar_qurl, self.is_pet_avatar_processed_by_pillow = (
             self._initialize_avatar_qurl_and_flag(self.original_pet_avatar_path, "pet")
         )
@@ -186,23 +158,80 @@ class ChatDialog(QDialog):
         layout.addWidget(self.send_button)
         main_layout.addWidget(container_widget)
         self.setLayout(main_layout)
-        self.async_thread: Optional[QThread] = None
-        self.async_runner: Optional[AsyncRunner] = None
         self._is_closing = False
+        self._is_waiting_for_response = False
         self.staged_files: List[Dict[str, Any]] = []
+        self.message_display_data_ready.connect(self._add_message_to_display)
         self._update_window_title_and_placeholder()
+
+    def send_message_handler(self):
+        """
+        重构后的发送消息处理器。
+        不再创建 QThread，而是使用 self.asyncio_helper 调度任务。
+        """
+        if self._is_waiting_for_response:
+            logger.warning("Previous async task still running. Please wait.")
+            return
+        user_message = self.input_field.text().strip()
+        if not user_message and not self.staged_files:
+            return
+        if user_message or self.staged_files:
+            self._add_message_to_display(
+                self.user_name,
+                user_message if user_message else "(发送文件)",
+                is_user=True,
+            )
+        if not self.is_agent_mode_active_chat and user_message:
+            if self.mongo_handler and self.mongo_handler.is_connected():
+                actual_user_name = self.config_manager.get_user_name()
+                message_to_save = user_message
+                if self.staged_files:
+                    filenames = [f["display_name"] for f in self.staged_files]
+                    message_to_save += f" [附加文件: {', '.join(filenames)}]"
+                self.mongo_handler.insert_chat_message(
+                    sender=actual_user_name,
+                    message_text=message_to_save,
+                    role_play_character=self.current_role_play_character,
+                )
+        self.input_field.clear()
+        files_to_send_now = list(self.staged_files)
+        self.staged_files.clear()
+        self._update_staged_files_ui()
+        self._set_input_active(False)
+        self._is_waiting_for_response = True
+        coro = self._send_message_async_logic(
+            user_message, self.is_agent_mode_active_chat, files_to_send_now
+        )
+        future = self.asyncio_helper.schedule_task(coro)
+        if future:
+            future.add_done_callback(self._handle_future_result)
+        else:
+            self._handle_async_failure("Failed to schedule async task.")
+
+    def _handle_future_result(self, future: asyncio.Future):
+        """
+        当 asyncio.Future 完成时的回调。
+        它在 asyncio 线程中被调用，所以UI更新需要小心。
+        """
+        try:
+            result = future.result()
+            self._handle_async_response(result)
+        except Exception as e:
+            self._handle_async_failure(str(e))
+        finally:
+            self._is_waiting_for_response = False
+            QTimer.singleShot(0, lambda: self._set_input_active(True))
+
+    def _set_input_active(self, active: bool):
+        self.send_button.setEnabled(active)
+        self.input_field.setEnabled(active)
+        self.attach_button.setEnabled(active)
+        if active:
+            self.input_field.setFocus()
 
     def _initialize_avatar_qurl_and_flag(
         self, image_path: str, avatar_type_for_log: str
     ) -> tuple[str, bool]:
-        """
-        初始化头像的QURL字符串和Pillow处理标志。
-        Args:
-            image_path: 原始图片路径。
-            avatar_type_for_log: 头像类型（例如 "pet", "user"），用于日志记录。
-        Returns:
-            一个元组 (qurl_string, is_processed_by_pillow)。
-        """
         qurl_string = ""
         is_processed_by_pillow = False
         path_for_qurl = image_path
@@ -218,14 +247,6 @@ class ChatDialog(QDialog):
         if path_for_qurl and os.path.exists(path_for_qurl):
             qurl_string = QUrl.fromLocalFile(os.path.abspath(path_for_qurl)).toString()
         return qurl_string, is_processed_by_pillow
-
-    def _set_input_active(self, active: bool):
-        """设置输入相关控件的激活状态。"""
-        self.send_button.setEnabled(active)
-        self.input_field.setEnabled(active)
-        self.attach_button.setEnabled(active)
-        if active:
-            self.input_field.setFocus()
 
     def set_agent_mode_active(self, active: bool):
         self.is_agent_mode_active_chat = active
@@ -307,25 +328,6 @@ class ChatDialog(QDialog):
                 )
         return history_list
 
-    def _cleanup_async_resources(self):
-        if self.async_runner:
-            try:
-                self.async_runner.task_completed.disconnect(self._handle_async_response)
-            except (TypeError, RuntimeError):
-                pass
-            try:
-                self.async_runner.task_failed.disconnect(self._handle_async_failure)
-            except (TypeError, RuntimeError):
-                pass
-            self.async_runner.deleteLater()
-            self.async_runner = None
-
-    def _handle_thread_actually_finished(self, finished_thread: QThread):
-        if self.async_thread is finished_thread:
-            self.async_thread = None
-        if not self._is_closing:
-            self._set_input_active(True)
-
     def _handle_attach_file_dialog(self):
         file_filter = "媒体文件 (*.png *.jpg *.jpeg *.gif *.webp *.mp3 *.wav *.m4a *.ogg);;所有文件 (*)"
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -399,13 +401,6 @@ class ChatDialog(QDialog):
             remove_button.clicked.connect(
                 lambda checked=False, fi=file_info: self._remove_staged_file(fi)
             )
-            thumb_and_remove_layout = QVBoxLayout()
-            thumb_and_remove_layout.setContentsMargins(0, 0, 0, 0)
-            thumb_and_remove_layout.setSpacing(2)
-            top_bar_layout = QHBoxLayout()
-            top_bar_layout.addStretch()
-            top_bar_layout.addWidget(remove_button)
-            top_bar_layout.setContentsMargins(0, 0, 0, 0)
             simple_item_widget = QFrame()
             simple_item_layout = QVBoxLayout(simple_item_widget)
             simple_item_layout.setContentsMargins(0, 0, 0, 0)
@@ -436,60 +431,6 @@ class ChatDialog(QDialog):
         self.staged_files = [
             fi for fi in self.staged_files if fi["path"] != file_info_to_remove["path"]
         ]
-        self._update_staged_files_ui()
-
-    def send_message_handler(self):
-        user_message = self.input_field.text().strip()
-        if not user_message and not self.staged_files:
-            return
-        if user_message or self.staged_files:
-            self._add_message_to_display(
-                self.user_name,
-                user_message if user_message else "(发送文件)",
-                is_user=True,
-            )
-        if not self.is_agent_mode_active_chat and user_message:
-            if self.mongo_handler and self.mongo_handler.is_connected():
-                actual_user_name = self.config_manager.get_user_name()
-                message_to_save = user_message
-                if self.staged_files:
-                    filenames = [f["display_name"] for f in self.staged_files]
-                    message_to_save += f" [附加文件: {', '.join(filenames)}]"
-                self.mongo_handler.insert_chat_message(
-                    sender=actual_user_name,
-                    message_text=message_to_save,
-                    role_play_character=self.current_role_play_character,
-                )
-        elif self.is_agent_mode_active_chat:
-            logger.info(
-                "Agent Mode: User message (and any files) not saved to chat history."
-            )
-        self.input_field.clear()
-        QApplication.processEvents()
-        if self.async_thread and self.async_thread.isRunning():
-            logger.warning("Previous async task still running. Please wait.")
-            return
-        files_to_send_now = list(self.staged_files)
-        current_task_thread = QThread(self)
-        self.async_runner = AsyncRunner(
-            self._send_message_async_logic(
-                user_message, self.is_agent_mode_active_chat, files_to_send_now
-            )
-        )
-        self.async_runner.moveToThread(current_task_thread)
-        self.async_runner.task_completed.connect(self._handle_async_response)
-        self.async_runner.task_failed.connect(self._handle_async_failure)
-        current_task_thread.started.connect(self.async_runner.run_async_task)
-        current_task_thread.finished.connect(current_task_thread.deleteLater)
-        current_task_thread.finished.connect(
-            lambda bound_thread=current_task_thread: self._handle_thread_actually_finished(
-                bound_thread
-            )
-        )
-        self.async_thread = current_task_thread
-        self._set_input_active(False)
-        self.async_thread.start()
-        self.staged_files.clear()
         self._update_staged_files_ui()
 
     async def _send_message_async_logic(
@@ -564,26 +505,13 @@ class ChatDialog(QDialog):
             }
 
     def _handle_async_response(self, response_data: Dict[str, Any]):
-        current_runner = self.async_runner
-        current_thread = current_runner.thread() if current_runner else None
         is_error_response = response_data.get("is_error", False)
         if self.is_agent_mode_active_chat:
             pet_text = response_data.get("text", "Agent action completed.")
             pet_emotion = response_data.get("emotion", "neutral")
             action_summary = response_data.get("action_summary", "")
-            action_performed = response_data.get("action_performed", False)
-            tool_result = response_data.get("tool_result")
             if action_summary:
                 pet_text += f"\n[Agent思考: {action_summary}]"
-            if tool_result and isinstance(tool_result, dict):
-                if tool_result.get("success") is False and tool_result.get("error"):
-                    pet_text += f"\n[工具执行错误: {tool_result.get('error')}]"
-                elif tool_result.get("message"):
-                    pet_text += f"\n[工具消息: {tool_result.get('message')}]"
-                if tool_result.get("content"):
-                    pet_text += (
-                        f"\n[文件内容预览 (部分)]:\n{tool_result.get('content')}"
-                    )
             self.speech_and_emotion_received.emit(pet_text, pet_emotion)
         else:
             pet_text = response_data.get("text", "我好像不知道该说什么了...")
@@ -592,6 +520,18 @@ class ChatDialog(QDialog):
             llm_tone = response_data.get(
                 "tone", self.config_manager.get_tts_default_tone()
             )
+            favorability_change = response_data.get("favorability_change", 0)
+            if self.relationship_manager and favorability_change != 0:
+                logger.info(
+                    f"LLM decided favorability change: {favorability_change}. Applying update."
+                )
+                self.asyncio_helper.schedule_task(
+                    self.relationship_manager.update_favorability(
+                        base_change=favorability_change
+                    )
+                )
+            elif self.relationship_manager:
+                logger.info("LLM decided no change in favorability.")
             if text_japanese and text_japanese.strip():
                 self.chat_text_for_tts_ready.emit(text_japanese, llm_tone)
             if not is_error_response:
@@ -607,16 +547,10 @@ class ChatDialog(QDialog):
             logger.info(
                 "Dialog is closing. Skipping internal UI updates for this response."
             )
-        else:
-            self._set_input_active(True)
-            self._add_message_to_display(self.pet_name, pet_text, is_user=False)
-        if current_thread and current_thread.isRunning():
-            current_thread.quit()
-        self._cleanup_async_resources()
+            return
+        self.message_display_data_ready.emit(self.pet_name, pet_text, False)
 
     def _handle_async_failure(self, error_message: str):
-        current_runner = self.async_runner
-        current_thread = current_runner.thread() if current_runner else None
         error_emotion = "neutral" if self.is_agent_mode_active_chat else "sad"
         self.speech_and_emotion_received.emit(
             f"呜，我好像出错了... ({error_message[:30]})", error_emotion
@@ -625,15 +559,11 @@ class ChatDialog(QDialog):
             logger.info(
                 f"Dialog is closing. Skipping internal UI updates for this failure: {error_message}"
             )
-        else:
-            self._set_input_active(True)
-            logger.error(f"Async task failed: {error_message}")
-            self._add_message_to_display(
-                self.pet_name, f"发生错误: {error_message}", is_user=False
-            )
-        if current_thread and current_thread.isRunning():
-            current_thread.quit()
-        self._cleanup_async_resources()
+            return
+        logger.error(f"Async task failed: {error_message}")
+        self.message_display_data_ready.emit(
+            self.pet_name, f"发生错误: {error_message}", False
+        )
 
     def _format_message_html(
         self, sender_name: str, message: str, avatar_qurl: str, is_user: bool
@@ -647,10 +577,7 @@ class ChatDialog(QDialog):
         if not was_processed_by_pillow:
             img_style += " border-radius: 50%;"
         if avatar_qurl:
-            avatar_img_html = (
-                f'<img src="{avatar_qurl}" width="{current_display_size}" height="{current_display_size}" '
-                f'style="{img_style}">'
-            )
+            avatar_img_html = f'<img src="{avatar_qurl}" width="{current_display_size}" height="{current_display_size}" style="{img_style}">'
         else:
             avatar_img_html = f'<div style="width:{current_display_size}px; height:{current_display_size}px; background-color:#555; border-radius:50%;"></div>'
         text_block_common_style = "padding:8px 12px; display:inline-block; max-width:80%; word-wrap:break-word; text-align:left;"
@@ -678,9 +605,7 @@ class ChatDialog(QDialog):
             </div>"""
         return formatted_message
 
-    def _add_message_to_display(
-        self, sender_name_for_log_only: str, message: str, is_user: bool
-    ):
+    def _add_message_to_display(self, sender_name: str, message: str, is_user: bool):
         if self._is_closing:
             return
         avatar_qurl = self.user_avatar_qurl if is_user else self.pet_avatar_qurl
@@ -709,7 +634,7 @@ class ChatDialog(QDialog):
                     sender_from_db = msg_data.get("sender", "")
                     is_user_msg = sender_from_db == self.user_name
                     self._add_message_to_display(
-                        sender_name_for_log_only=sender_from_db,
+                        sender_name=sender_from_db,
                         message=msg_data.get("message_text", ""),
                         is_user=is_user_msg,
                     )
@@ -727,12 +652,6 @@ class ChatDialog(QDialog):
             return
         self._is_closing = True
         self.dialog_closed.emit()
-        active_thread = self.async_thread
-        if active_thread and active_thread.isRunning():
-            logger.info("Dialog closing, requesting async thread to quit.")
-            active_thread.quit()
-        else:
-            self._cleanup_async_resources()
 
     def closeEvent(self, event):
         self._close_dialog_actions()

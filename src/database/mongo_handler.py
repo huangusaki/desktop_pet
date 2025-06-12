@@ -1,10 +1,11 @@
-from pymongo import MongoClient, DESCENDING
+from pymongo import MongoClient, DESCENDING, UpdateOne
 from pymongo.database import Database
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
 import datetime
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
 
 logger = logging.getLogger("MongoDB")
 
@@ -16,9 +17,11 @@ class MongoHandler:
         self.connection_string = connection_string
         self.database_name = database_name
         self.chat_history_collection_name = collection_name
+        self.relationship_status_collection_name = "relationship_status"
         self.client: Optional[MongoClient] = None
         self.db: Optional[Database] = None
         self.chat_collection: Optional[Collection] = None
+        self.relationship_status_collection: Optional[Collection] = None
         self.graph_nodes_collection_name = "graph_data_nodes"
         self.graph_edges_collection_name = "graph_data_edges"
         self.llm_usage_collection_name = "llm_usage"
@@ -37,6 +40,9 @@ class MongoHandler:
             self.client.admin.command("ping")
             self.db = self.client[self.database_name]
             self.chat_collection = self.db[self.chat_history_collection_name]
+            self.relationship_status_collection = self.db[
+                self.relationship_status_collection_name
+            ]
             self.graph_nodes_collection = self.db[self.graph_nodes_collection_name]
             self.graph_edges_collection = self.db[self.graph_edges_collection_name]
             self.llm_usage_collection = self.db[self.llm_usage_collection_name]
@@ -48,6 +54,9 @@ class MongoHandler:
             )
             logger.info(
                 f"  Chat history collection: '{self.chat_history_collection_name}'"
+            )
+            logger.info(
+                f"  Relationship status collection: '{self.relationship_status_collection_name}'"
             )
             logger.info(
                 f"  Graph nodes collection: '{self.graph_nodes_collection_name}'"
@@ -71,6 +80,7 @@ class MongoHandler:
         self.client = None
         self.db = None
         self.chat_collection = None
+        self.relationship_status_collection = None
         self.graph_nodes_collection = None
         self.graph_edges_collection = None
         self.llm_usage_collection = None
@@ -81,6 +91,7 @@ class MongoHandler:
             self.client is not None
             and self.db is not None
             and self.chat_collection is not None
+            and self.relationship_status_collection is not None
             and self.graph_nodes_collection is not None
             and self.graph_edges_collection is not None
             and self.llm_usage_collection is not None
@@ -244,3 +255,53 @@ class MongoHandler:
                 exc_info=True,
             )
             return []
+
+    def get_favorability_score(self, user_name: str, pet_name: str) -> Optional[int]:
+        """
+        获取指定用户和宠物之间的好感度分数。
+        """
+        if not self.is_connected() or self.relationship_status_collection is None:
+            logger.error("错误: 未连接到 MongoDB 或关系集合未初始化，无法获取好感度。")
+            return None
+        try:
+            doc = self.relationship_status_collection.find_one(
+                {"user_name": user_name, "pet_name": pet_name}
+            )
+            if doc and "favorability_score" in doc:
+                return int(doc["favorability_score"])
+            return None
+        except Exception as e:
+            logger.error(
+                f"从 MongoDB ('{self.relationship_status_collection_name}') 获取好感度时出错: {e}",
+                exc_info=True,
+            )
+            return None
+
+    async def update_favorability_score(
+        self, user_name: str, pet_name: str, new_score: int
+    ) -> bool:
+        if not self.is_connected() or self.relationship_status_collection is None:
+            logger.error("错误: 未连接到 MongoDB 或关系集合未初始化，无法更新好感度。")
+            return False
+        query = {"user_name": user_name, "pet_name": pet_name}
+        update = {
+            "$set": {
+                "favorability_score": new_score,
+                "last_updated": datetime.datetime.now(datetime.timezone.utc),
+            }
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self.relationship_status_collection.update_one(
+                    query, update, upsert=True
+                ),
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"向 MongoDB ('{self.relationship_status_collection_name}') 更新好感度时出错: {e}",
+                exc_info=True,
+            )
+            return False

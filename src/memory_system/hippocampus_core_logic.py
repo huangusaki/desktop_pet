@@ -27,6 +27,91 @@ if not logger.hasHandlers():
 
 
 class Hippocampus:
+    async def _extract_keywords_for_retrieval(
+        self, txt: str, fast_kw: bool
+    ) -> List[str]:
+        """
+        根据 fast_kw 标志，使用 jieba 或 LLM 从文本中提取关键词/主题。
+        这是一个被 get_memory_from_text 和 get_activation_score_from_text 调用的辅助方法。
+        """
+        if not txt or not txt.strip() or not self.config:
+            return []
+        if fast_kw:
+            try:
+                import jieba
+
+                stopwords = set(
+                    self.config.memory_ban_words + list("的了和是就都而及或个吧啦呀吗")
+                )
+                return list(
+                    set(
+                        w
+                        for w in jieba.cut(txt, cut_all=False)
+                        if len(w) > 1 and w not in stopwords
+                    )
+                )[: self.config.fast_retrieval_max_keywords]
+            except ImportError:
+                logger.warning("jieba 未安装，fast_kw 将回退到 LLM 提取关键词。")
+                fast_kw = False
+            except Exception as e:
+                logger.error(f"jieba 分词出错: {e}，fast_kw 将回退。")
+                fast_kw = False
+        topic_n = min(
+            self.config.retrieval_input_max_topics,
+            max(
+                1,
+                self.calculate_topic_num(
+                    txt, self.config.retrieval_input_compress_rate
+                ),
+            ),
+        )
+        return await self.extract_topics_from_text(txt, topic_n)
+
+    def _perform_activation_spread(
+        self, seeds: List[str], depth: int
+    ) -> Dict[str, float]:
+        """
+        从给定的种子节点执行激活扩散，并返回节点及其最终激活值的映射。
+        这是一个被 get_memory_from_text 和 get_activation_score_from_text 调用的辅助方法。
+        """
+        if not seeds or not self.config:
+            return {}
+        act_map: Dict[str, float] = {}
+        for seed in seeds:
+            if seed not in self.memory_graph.G:
+                continue
+            q: List[Tuple[str, float, int]] = [(seed, 1.0, 0)]
+            visited_spread: Set[str] = {seed}
+            head = 0
+            while head < len(q):
+                curr_n, curr_act, curr_d = q[head]
+                head += 1
+                act_map[curr_n] = act_map.get(curr_n, 0.0) + curr_act
+                if curr_d >= depth:
+                    continue
+                try:
+                    for neighbor in self.memory_graph.G.neighbors(curr_n):
+                        if neighbor not in visited_spread:
+                            edge_data = self.memory_graph.G[curr_n][neighbor]
+                            strength = edge_data.get("strength", 1)
+                            decay_base = self.config.activation_link_decay_base
+                            eff_strength = max(1, strength)
+                            actual_decay = decay_base**eff_strength
+                            new_act = curr_act * (1.0 - actual_decay)
+                            if (
+                                new_act
+                                > self.config.activation_min_threshold_for_spread
+                            ):
+                                visited_spread.add(neighbor)
+                                q.append((neighbor, new_act, curr_d + 1))
+                except nx.NetworkXError as e:
+                    logger.warning(f"激活扩散时访问邻居节点 '{curr_n}' 出错: {e}")
+                except Exception as e:
+                    logger.error(
+                        f"激活扩散时发生未知错误在节点 '{curr_n}': {e}", exc_info=True
+                    )
+        return act_map
+
     def __init__(self):
         self.memory_graph: MemoryGraph = MemoryGraph()
         self.config: Optional[MemoryConfig] = None
@@ -599,76 +684,43 @@ class Hippocampus:
         act_depth = (
             depth if depth is not None else self.config.retrieval_activation_depth
         )
-        kws: List[str] = []
+        kws = await self._extract_keywords_for_retrieval(txt, fast_kw)
         semantic_seeds_from_embedding: Set[str] = set()
-        if fast_kw:
-            try:
-                import jieba
-
-                stopwords = set(
-                    self.config.memory_ban_words + list("的了和是就都而及或个吧啦呀吗")
-                )
-                kws = list(
-                    set(
-                        w
-                        for w in jieba.cut(txt, cut_all=False)
-                        if len(w) > 1 and w not in stopwords
-                    )
-                )[: self.config.fast_retrieval_max_keywords]
-            except ImportError:
-                logger.warning("jieba 未安装，fast_kw 将回退到 LLM 提取关键词。")
-                fast_kw = False
-            except Exception as e:
-                logger.error(f"jieba 分词出错: {e}，fast_kw 将回退。")
-                fast_kw = False
-        if not fast_kw:
-            topic_n = min(
-                self.config.retrieval_input_max_topics,
-                max(
-                    1,
-                    self.calculate_topic_num(
-                        txt, self.config.retrieval_input_compress_rate
-                    ),
-                ),
+        if not fast_kw and kws and self.llm_embedding_topic:
+            query_text_embedding = await self.get_embedding_async(
+                txt, request_type="memory_semantic_seed_query_embed"
             )
-            kws = await self.extract_topics_from_text(txt, topic_n)
-            if kws and self.llm_embedding_topic:
-                query_text_embedding = await self.get_embedding_async(
-                    txt, request_type="memory_semantic_seed_query_embed"
-                )
-                if query_text_embedding:
-                    logger.debug(f"开始基于输入文本嵌入查找语义相似的种子节点...")
-                    candidate_semantic_seeds = []
-                    for node_name_iter, attr_iter in self.memory_graph.G.nodes(
-                        data=True
+            if query_text_embedding:
+                logger.debug(f"开始基于输入文本嵌入查找语义相似的种子节点...")
+                candidate_semantic_seeds = []
+                for node_name_iter, attr_iter in self.memory_graph.G.nodes(data=True):
+                    node_concept_embedding = attr_iter.get("embedding")
+                    if node_concept_embedding and isinstance(
+                        node_concept_embedding, list
                     ):
-                        node_concept_embedding = attr_iter.get("embedding")
-                        if node_concept_embedding and isinstance(
-                            node_concept_embedding, list
-                        ):
-                            try:
-                                sim_to_concept = cosine_similarity(
-                                    query_text_embedding, node_concept_embedding
+                        try:
+                            sim_to_concept = cosine_similarity(
+                                query_text_embedding, node_concept_embedding
+                            )
+                            if (
+                                sim_to_concept
+                                >= self.config.keyword_retrieval_node_similarity_threshold
+                            ):
+                                candidate_semantic_seeds.append(
+                                    (node_name_iter, sim_to_concept)
                                 )
-                                if (
-                                    sim_to_concept
-                                    >= self.config.keyword_retrieval_node_similarity_threshold
-                                ):
-                                    candidate_semantic_seeds.append(
-                                        (node_name_iter, sim_to_concept)
-                                    )
-                                    logger.debug(
-                                        f"节点 '{node_name_iter}' (sim: {sim_to_concept:.4f}) 被识别为潜在语义种子。"
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"计算输入文本与概念节点 '{node_name_iter}' 嵌入相似度时出错: {e}"
+                                logger.debug(
+                                    f"节点 '{node_name_iter}' (sim: {sim_to_concept:.4f}) 被识别为潜在语义种子。"
                                 )
-                    for seed_name, _sim_score in candidate_semantic_seeds:
-                        semantic_seeds_from_embedding.add(seed_name)
-                    logger.info(
-                        f"通过嵌入相似度找到 {len(semantic_seeds_from_embedding)} 个额外的语义种子节点。"
-                    )
+                        except Exception as e:
+                            logger.error(
+                                f"计算输入文本与概念节点 '{node_name_iter}' 嵌入相似度时出错: {e}"
+                            )
+                for seed_name, _sim_score in candidate_semantic_seeds:
+                    semantic_seeds_from_embedding.add(seed_name)
+                logger.info(
+                    f"通过嵌入相似度找到 {len(semantic_seeds_from_embedding)} 个额外的语义种子节点。"
+                )
         input_txt_keywords = set(kws)
         if not kws and not semantic_seeds_from_embedding:
             logger.info(
@@ -687,7 +739,7 @@ class Hippocampus:
             )
             return []
         logger.info(f"用于激活扩散的种子节点 (合并后): {seeds}")
-        act_map: Dict[str, float] = {}
+        act_map = self._perform_activation_spread(seeds, act_depth)
         for seed in seeds:
             q: List[Tuple[str, float, int]] = [(seed, 1.0, 0)]
             visited_spread: Set[str] = {seed}
@@ -970,78 +1022,13 @@ class Hippocampus:
     ) -> float:
         if not txt or not txt.strip() or not self.config:
             return 0.0
-        kws: List[str] = []
-        if fast_kw:
-            try:
-                import jieba
-
-                stopwords = set(
-                    self.config.memory_ban_words + list("的了和是就都而及或个吧啦呀吗")
-                )
-                kws = list(
-                    set(
-                        w
-                        for w in jieba.cut(txt, cut_all=False)
-                        if len(w) > 1 and w not in stopwords
-                    )
-                )[: self.config.fast_retrieval_max_keywords]
-            except ImportError:
-                logger.warning(
-                    "jieba 未安装，fast_kw (激活分数) 将回退到 LLM 提取关键词。"
-                )
-                fast_kw = False
-            except Exception as e:
-                logger.error(f"jieba 分词 (激活分数) 出错: {e}，fast_kw 将回退。")
-                fast_kw = False
-        if not fast_kw:
-            topic_n = min(
-                self.config.retrieval_input_max_topics,
-                max(
-                    1,
-                    self.calculate_topic_num(
-                        txt, self.config.retrieval_input_compress_rate
-                    ),
-                ),
-            )
-            kws = await self.extract_topics_from_text(txt, topic_n)
+        kws = await self._extract_keywords_for_retrieval(txt, fast_kw)
         if not kws:
             return 0.0
         seeds = [kw for kw in kws if kw in self.memory_graph.G]
         if not seeds:
             return 0.0
-        act_map: Dict[str, float] = {}
-        for seed in seeds:
-            q: List[Tuple[str, float, int]] = [(seed, 1.0, 0)]
-            visited_spread: Set[str] = {seed}
-            head = 0
-            while head < len(q):
-                curr_n, curr_act, curr_d = q[head]
-                head += 1
-                act_map[curr_n] = act_map.get(curr_n, 0.0) + curr_act
-                if curr_d >= depth:
-                    continue
-                try:
-                    for neighbor in self.memory_graph.G.neighbors(curr_n):
-                        if neighbor not in visited_spread:
-                            edge_data = self.memory_graph.G[curr_n][neighbor]
-                            strength = edge_data.get("strength", 1)
-                            decay_base = self.config.activation_link_decay_base
-                            eff_strength = max(1, strength)
-                            actual_decay = decay_base**eff_strength
-                            new_act = curr_act * (1.0 - actual_decay)
-                            if (
-                                new_act
-                                > self.config.activation_min_threshold_for_spread
-                            ):
-                                visited_spread.add(neighbor)
-                                q.append((neighbor, new_act, curr_d + 1))
-                except nx.NetworkXError as e:
-                    logger.warning(f"计算激活分数时访问邻居节点 '{curr_n}' 出错: {e}")
-                except Exception as e:
-                    logger.error(
-                        f"计算激活分数时发生未知错误在节点 '{curr_n}': {e}",
-                        exc_info=True,
-                    )
+        act_map = self._perform_activation_spread(seeds, depth)
         if not act_map:
             return 0.0
         total_act = sum(act_map.values())

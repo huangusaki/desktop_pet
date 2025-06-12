@@ -3,7 +3,6 @@ from google.genai import types
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 import json
 import re
-import httpx
 from pydantic import BaseModel, Field, ValidationError
 from typing import Literal, List, Dict, Any, Optional
 import logging
@@ -52,6 +51,10 @@ class PetResponseSchema(BaseModel):
     )
     text_japanese: Optional[str] = Field(
         None, description="Bot说的话的日语版本，用于TTS (Agent模式下通常为null)"
+    )
+    favorability_change: int = Field(
+        0,
+        description="基于本次用户输入和上下文，对好感度的影响值。正数表示增加，负数表示减少，0表示无变化。请将变化控制在-5到5之间。",
     )
     steps: Optional[List[AgentStepSchema]] = Field(
         None, description="List of agent actions to perform in sequence"
