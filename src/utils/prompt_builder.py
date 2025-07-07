@@ -152,13 +152,14 @@ class PromptBuilder:
             f"\n下面是聊天记录：\n\n---------------------------------\n"
         )
         behavioral_rules = f"""\n## 你的回答还应该遵守这些规则：
-    1、严格遵守json格式输出规范，特别是think条目的输出要求。
+    1、严格遵守json格式输出规范，特别是think条目的输出要求，think必须要使用爱丽丝第一人称思考
     2、一定要检查自己的回答，不要复述或总结对方或自己的对话，不要有那么多和前文相似的词语或句子（例如“哎呀”、“嘿嘿”、“哼”之类的语气词），一定要想想回答会不会太重复，不要一直往某个话题/方向上靠，如果重复就换一个方向思考或者换个说法，必须要有逻辑严密的推理过程。
     3、不要刻意突出人设，不要过度纠结于自己的人设，严禁提及任何设定里的内容，禁止发送emoji或者表情（颜文字可以）。
     4、注意聊天记录的时间，注意中文标点符号正确使用方式，比如省略号要用“……”而不是“...”，也不要弄得全都是省略号，禁止使用“‘”和“’”符号，表达方式要丰富，不要总是把回复重心放在{user_name}，断句要合理。\n
     5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，不要盲目乐观。
     6、不要拓展到无关话题上，三观要正，对不合适的事要指责。
     7、回答要口语化、日常化，不要书面化，应该更要有人和人对话的感觉。
+    8、text_japanese中，请将{pet_name}转成片假名，不要使用原名
 """
         system_instruction_part_A = persona_identity
         formatted_history_string = self._get_formatted_chat_history_content(
@@ -208,7 +209,7 @@ class PromptBuilder:
         )
         json_format_instruction = (
             "\n## attention: The output format is extremely important. Your MUST strictly follow JSON format and ONLY contain a JSON object with no other text or markdown (like ```json or ```) . \nThe target JSON object must include the following keys:\n"
-            f"think: {pet_name}解读当前对话和上下文的主视角，基于要求从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号。\n"
+            f"think:这一项的内容在1300字以上，需要换行请用转义字符\\n，全程使用{pet_name}的第一人称视角分析，思考过程应包含：1. 对当前状况的分析和对聊天内容的吐槽（日式可爱语气） 2.构思五个以上的回复选项并评估其优劣，最终选择最佳回复，禁止使用“*”，你可以适度引用和分析聊天记录中的原话来支撑你的观点。\n"
             f"text:中文字符串，0~100个字符长度\n"
             f"emotion: 体现你回答时的心情，值只能是以下选项中的一个: [{emotions_str}]\n"
             f"tone: 你觉得你的回答应该使用的语调，值只能是以下选项中的一个: [{tones_str}]\n"
@@ -277,20 +278,20 @@ class PromptBuilder:
             f"这张图片是{user_name}的屏幕截图。请根据屏幕内容，用你扮演的角色的口吻发表评论或感想，例如想吐槽就狠狠锐评，不要留任何情面，具体情况看你的分析，不要直接说“我看到屏幕上...”或“用户正在...”，不要使用「」、‘’这几个符号 ，也不要有（笑）（冷笑）等描写，而是更自然地表达，仿佛是你自己的想法，不超过120个字。\n"
             f"另外，这些是你之前几次看{user_name}屏幕发表的评论（刚发生不久），可以适当参考一下看看是否和当前的截图有关联，请注意，接下来的回复禁止出现与这几条回复意思十分相近的词语和句子：\n{recent_screen_logs_str}\n\nattention: The output format is extremely important. Your output MUST strictly follow JSON format and MUST ONLY contain a JSON object with no other text or markdown (like ```json or ```),"
             "The target JSON object must include the following keys:\n"
-            f"think: 详细的推理思考过程，基于情景、上下文以及要求，从对话中推理出不下于五个候选项的回答，然后基于实际情景以及要求从候选项中获得正确答案，大于1500个字，这一项不要使用逗号、句号之外的符号（包括换行符）\n"
+            f"think: 这一项的内容在1300字以上，需要换行请用转义字符\\n，全程使用{pet_name}的第一人称视角分析，思考过程应包含：1. 对当前状况的分析和对聊天内容的吐槽（日式可爱语气） 2.构思五个以上的回复选项并评估其优劣，最终选择最佳回复，禁止使用“*”，你可以适度引用和分析聊天记录中的原话来支撑你的观点。\n"
             f"image_description:Chinese str,about 100 characters long,detailed description of the main visual elements in the image.\n"
             f"emotion: This is your current emotion. The value MUST be one of the following predefined emotions (do not change the values): {available_emotions_str}.\n"
             f"tone: This is the tone of your voice for TTS. The value MUST be one of the following: {tones_str}. Default to '{self.default_tone}' if unsure.\n"
             f"text_japanese: japanese str, Original Japanese of the content in the 'text' field.\n"
             "\nJSON output example:\n"
             "{\n"
-            f'  "think": "用户正在跟我打招呼，所以我应该基于人设给他一个合理的回复，回答候选项1：…回答候选项2：…回答候选项3：…这个回答完全符合了用户所有要求，因此回答…（大约3000中文字符）",\n'
+            f'  "think": "嗯…这张图好奇怪，是关于…的内容吗？我想想该怎么回答比较好，这个吗：…，好像一般？回答候选项2：…，啊，这个不错！回答候选项3：…这个回答完全符合了所有要求，因此回答…（大约1500个字）",\n'
             f'  "text": "Hello there, I am {pet_name}!",\n'
             f'  "image_description": "屏幕截图显示了一个YouTube视频播放界面，视频标题是关于猫咪的.etc",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "tone": "{self.default_tone}",\n'
             f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
-            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复."
+            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复，另外text_japanese中，请将{pet_name}转成片假名，不要使用原名"
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"
         logger.info(f"{final_prompt}")

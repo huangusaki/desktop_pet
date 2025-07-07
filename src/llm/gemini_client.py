@@ -84,7 +84,15 @@ class GeminiClient:
     ):
         if not api_key or api_key == "YOUR_API_KEY_HERE":
             raise ValueError("Gemini API Key 未在配置文件中设置或无效。")
-        self.api_key = api_key
+        self.api_keys: List[str] = []
+        if "," in api_key:
+            self.api_keys.extend([k.strip() for k in api_key.split(",") if k.strip()])
+        else:
+            self.api_keys.append(api_key)
+        if not self.api_keys:
+            raise ValueError("未能从配置中解析出任何有效的 Gemini API Key。")
+        self.current_key_index = 0
+        self._clients: List[genai.Client] = []
         self.model_name = model_name
         self.pet_name = pet_name
         self.prompt_builder = prompt_builder
@@ -105,14 +113,95 @@ class GeminiClient:
         if self.thinking_budget is not None:
             if self.thinking_budget == 0:
                 logger.info("信息: thinking_budget 设置为 0，将禁用思考过程。")
-        self.client = None
-        try:
-            self.client = genai.Client(api_key=self.api_key)
-        except Exception as e:
-            raise ConnectionError(f"无法初始化 genai.Client(). 原始错误: {e}")
+        for key_val in self.api_keys:
+            try:
+                client_instance = genai.Client(api_key=key_val)
+                self._clients.append(client_instance)
+            except Exception as e:
+                logger.error(f"初始化 Gemini Client (key: ...{key_val[-4:]}) 失败: {e}")
+        if not self._clients:
+            raise ConnectionError(
+                "所有提供的 Gemini API Keys 都无法成功初始化 genai.Client。"
+            )
+        logger.info(f"成功为 {len(self._clients)} 个 Gemini API Key 初始化了客户端。")
         self.enabled_tools = []
         self.available_tones = self.config_manager.get_tts_available_tones()
         self.default_tone = self.config_manager.get_tts_default_tone()
+
+    def _get_current_client(self) -> genai.Client:
+        """获取与当前密钥索引对应的客户端实例。"""
+        if not self._clients:
+            raise RuntimeError("GeminiClient 没有可用的 genai.Client 实例。")
+        return self._clients[self.current_key_index]
+
+    def _switch_key(self) -> bool:
+        """切换到下一个可用的API密钥。"""
+        if len(self.api_keys) <= 1:
+            return False
+        current_key_before_switch = self.api_keys[self.current_key_index]
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+        new_key = self.api_keys[self.current_key_index]
+        logger.warning(
+            f"GeminiClient: 遇到可重试错误，从 Key ...{current_key_before_switch[-4:]} "
+            f"切换到 Key #{self.current_key_index + 1}/{len(self.api_keys)} (...{new_key[-4:]})。"
+        )
+        return True
+
+    async def _execute_generate_content_with_retry(
+        self,
+        model: str,
+        contents: List[Any],
+        config: Optional[types.GenerateContentConfig],
+    ) -> Any:
+        """
+        执行 generate_content 调用，并包含重试和密钥切换逻辑。
+        """
+        max_retries = 3
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                client = self._get_current_client()
+                logger.info(
+                    f"GeminiClient: 尝试发送请求 (Attempt {attempt + 1}/{max_retries}, Key #{self.current_key_index + 1})"
+                )
+                response = await client.aio.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+                return response
+            except Exception as e:
+                last_exception = e
+                error_str = str(e).lower()
+                logger.warning(
+                    f"GeminiClient: 请求失败 (Attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}"
+                )
+                is_rate_limit = (
+                    "rate limit" in error_str
+                    or "429" in error_str
+                    or "resource_exhausted" in error_str
+                )
+                is_server_error = (
+                    "server error" in error_str
+                    or "500" in error_str
+                    or "unavailable" in error_str
+                    or "503" in error_str
+                )
+                if not is_rate_limit and not is_server_error:
+                    logger.error("GeminiClient: 遇到不可重试的错误，将直接失败。")
+                    raise e
+                if attempt < max_retries - 1:
+                    switched = self._switch_key()
+                    if not switched:
+                        wait_time = 2 ** (attempt + 1)
+                        logger.info(f"GeminiClient: 将等待 {wait_time} 秒后重试...")
+                        await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"GeminiClient: 达到最大重试次数 ({max_retries})，最终失败。"
+                    )
+                    raise RuntimeError(
+                        f"在 {max_retries} 次尝试后API请求失败。最后错误: {last_exception}"
+                    ) from last_exception
+        raise RuntimeError("请求重试循环意外结束。") from last_exception
 
     async def _build_chat_contents_for_api(
         self,
@@ -157,8 +246,6 @@ class GeminiClient:
     ) -> Dict[str, Any]:
         response_object = None
         try:
-            if not self.client:
-                raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
             chat_contents: List[Any]
             if is_agent_mode:
                 chat_contents = [types.Part(text=message_text)]
@@ -196,7 +283,7 @@ class GeminiClient:
                 if generation_config_args
                 else None
             )
-            response_object = await self.client.aio.models.generate_content(
+            response_object = await self._execute_generate_content_with_retry(
                 model=self.model_name, contents=chat_contents, config=api_config
             )
             logger.info(
@@ -258,8 +345,6 @@ class GeminiClient:
     ) -> Dict[str, Any]:
         response_object = None
         try:
-            if not self.client:
-                raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
             image_part_obj = types.Part(
                 inline_data=types.Blob(data=image_bytes, mime_type=mime_type)
             )
@@ -290,7 +375,7 @@ class GeminiClient:
                 if vision_config_args
                 else None
             )
-            response_object = await self.client.aio.models.generate_content(
+            response_object = await self._execute_generate_content_with_retry(
                 model=self.model_name,
                 contents=user_parts_for_vision,
                 config=api_vision_config,
@@ -345,8 +430,7 @@ class GeminiClient:
     ) -> Dict[str, Any]:
         response_object = None
         try:
-            if not self.client:
-                raise ConnectionError("Gemini Client (genai.Client) 未被正确初始化。")
+            client_for_upload = self._get_current_client()
             text_parts = await self._build_chat_contents_for_api(
                 new_user_message_text=text_prompt,
                 hippocampus_manager=None,
@@ -374,7 +458,7 @@ class GeminiClient:
                     )
                     try:
                         upload_func_with_args = functools.partial(
-                            self.client.files.upload, file=file_path
+                            client_for_upload.files.upload, file=file_path
                         )
                         uploaded_file_object = await loop.run_in_executor(
                             None, upload_func_with_args
@@ -418,7 +502,7 @@ class GeminiClient:
             logger.info(
                 f"Sending multimodal request with {len(api_contents)} parts to LLM. Config: {api_multimodal_config}"
             )
-            response_object = await self.client.aio.models.generate_content(
+            response_object = await self._execute_generate_content_with_retry(
                 model=self.model_name,
                 contents=api_contents,
                 config=api_multimodal_config,

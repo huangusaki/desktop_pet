@@ -415,6 +415,9 @@ class ApplicationContext:
             self._gui.screen_analyzer.pet_reaction_ready.connect(
                 self._gui.pet_window.update_speech_and_emotion
             )
+            self._gui.screen_analyzer.pet_reaction_ready.connect(
+                self.handle_screen_analysis_reaction
+            )
             self._gui.screen_analyzer.request_pet_hide.connect(
                 self._gui.pet_window.handle_hide_request
             )
