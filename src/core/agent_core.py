@@ -100,25 +100,25 @@ class AgentCore:
                 tool_name = step.get("tool_to_call")
                 tool_args = step.get("tool_arguments", {})
                 step_description = step.get(
-                    "step_description", f"执行步骤 {i+1}: {tool_name}"
+                    "step_description", f"执行步骤 {i + 1}: {tool_name}"
                 )
                 cumulative_feedback_for_user.append(
-                    f"\n[步骤 {i+1}/{len(planned_steps)}] {step_description}"
+                    f"\n[步骤 {i + 1}/{len(planned_steps)}] {step_description}"
                 )
                 if tool_name and tool_name in self.tools:
                     tool_function = self.tools[tool_name]
                     logger.info(
-                        f"AgentCore: Executing step {i+1}: Tool '{tool_name}' with args: {tool_args}"
+                        f"AgentCore: Executing step {i + 1}: Tool '{tool_name}' with args: {tool_args}"
                     )
                     if step_delay_seconds > 0 and i > 0:
                         logger.info(
-                            f"Waiting {step_delay_seconds}s before executing step {i+1}..."
+                            f"Waiting {step_delay_seconds}s before executing step {i + 1}..."
                         )
                         time.sleep(step_delay_seconds)
                     try:
                         if not isinstance(tool_args, dict):
                             raise ValueError(
-                                f"Tool arguments for '{tool_name}' (step {i+1}) must be a dictionary, got {type(tool_args)}"
+                                f"Tool arguments for '{tool_name}' (step {i + 1}) must be a dictionary, got {type(tool_args)}"
                             )
                         execution_result = tool_function(**tool_args)
                         step_result_message = ""
@@ -137,7 +137,7 @@ class AgentCore:
                                 )
                                 step_result_message = f"失败: {error_detail}"
                                 logger.error(
-                                    f"Tool execution failed (step {i+1}): {tool_name}, Error: {error_detail}"
+                                    f"Tool execution failed (step {i + 1}): {tool_name}, Error: {error_detail}"
                                 )
                                 all_steps_succeeded = False
                         elif isinstance(execution_result, str):
@@ -146,15 +146,13 @@ class AgentCore:
                         if not all_steps_succeeded:
                             break
                     except Exception as e_exec:
-                        error_msg = (
-                            f"执行工具 '{tool_name}' (步骤 {i+1}) 时发生错误: {e_exec}"
-                        )
+                        error_msg = f"执行工具 '{tool_name}' (步骤 {i + 1}) 时发生错误: {e_exec}"
                         logger.error(error_msg, exc_info=True)
                         cumulative_feedback_for_user.append(f"错误: {error_msg}")
                         all_steps_succeeded = False
                         break
                 else:
-                    error_msg = f"步骤 {i+1}: 未知或无效的工具 '{tool_name}'。"
+                    error_msg = f"步骤 {i + 1}: 未知或无效的工具 '{tool_name}'。"
                     logger.error(error_msg)
                     cumulative_feedback_for_user.append(error_msg)
                     all_steps_succeeded = False
@@ -220,12 +218,12 @@ class AgentCore:
                             return {"success": True, "message": success_msg}
                     if app_name_lower in ["vscode", "code"]:
                         subprocess.Popen(
-                            f'start "" "code"',
+                            'start "" "code"',
                             shell=True,
                             creationflags=subprocess.CREATE_NO_WINDOW,
                         )
                         success_msg = (
-                            f"已尝试通过 'start code' 启动 VS Code (作为后备)。"
+                            "已尝试通过 'start code' 启动 VS Code (作为后备)。"
                         )
                         logger.info(success_msg)
                         return {"success": True, "message": success_msg}
@@ -370,7 +368,9 @@ class AgentCore:
             resolved_path_for_error = (
                 abs_file_path
                 if abs_file_path
-                else expanded_file_path if expanded_file_path else file_path
+                else expanded_file_path
+                if expanded_file_path
+                else file_path
             )
             err_msg = f"创建/写入文件 '{file_path}' (解析为 '{resolved_path_for_error}') 时发生错误: {e}"
             logger.error(err_msg, exc_info=True)
@@ -409,7 +409,9 @@ class AgentCore:
             resolved_path_for_error = (
                 abs_file_path
                 if abs_file_path
-                else expanded_file_path if expanded_file_path else file_path
+                else expanded_file_path
+                if expanded_file_path
+                else file_path
             )
             err_msg = f"读取文件 '{file_path}' (解析为 '{resolved_path_for_error}') 时发生错误: {e}"
             logger.error(err_msg, exc_info=True)

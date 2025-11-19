@@ -1,10 +1,15 @@
 PyQt6
+PyQt6-WebEngine
 aiohttp
 Pillow
 pymongo
 google-generativeai
 networkx
 numpy
-pydantic
+pydantic>=2.0.0
 jieba
 google-genai
+fastapi>=0.109.0
+uvicorn[standard]
+websockets
+python-multipart

@@ -244,9 +244,9 @@ class Hippocampus:
                 )
                 if emb_vec:
                     self.memory_graph.G.nodes[concept]["embedding"] = emb_vec
-                    self.memory_graph.G.nodes[concept][
-                        "last_modified"
-                    ] = datetime.now().timestamp()
+                    self.memory_graph.G.nodes[concept]["last_modified"] = (
+                        datetime.now().timestamp()
+                    )
                     bulk_db_upd_concept.append(
                         UpdateOne(
                             {"concept": concept},
@@ -346,12 +346,12 @@ class Hippocampus:
                                 fail_s += 1
                             await asyncio.sleep(delay)
                 if node_modified_in_graph_and_db and self.db_instance is not None:
-                    self.memory_graph.G.nodes[concept][
-                        "memory_events"
-                    ] = current_memory_events
-                    self.memory_graph.G.nodes[concept][
-                        "last_modified"
-                    ] = datetime.now().timestamp()
+                    self.memory_graph.G.nodes[concept]["memory_events"] = (
+                        current_memory_events
+                    )
+                    self.memory_graph.G.nodes[concept]["last_modified"] = (
+                        datetime.now().timestamp()
+                    )
                     try:
                         async with self._db_graph_lock:
                             self.db_instance.graph_data_nodes.update_one(
@@ -429,7 +429,7 @@ class Hippocampus:
         return hash(full_hash_string)
 
     def calculate_edge_hash(self, s: str, t: str) -> int:
-        return hash(f"e:{'-'.join(sorted([s,t]))}")
+        return hash(f"e:{'-'.join(sorted([s, t]))}")
 
     def _create_hierarchical_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
@@ -455,10 +455,10 @@ class Hippocampus:
         if not prompt:
             return None
         try:
-            resp: Optional[GeminiSDKResponse] = (
-                await self.llm_summary_by_topic.generate_response_async(
-                    prompt, request_type="memory_gen_hier_summary"
-                )
+            resp: Optional[
+                GeminiSDKResponse
+            ] = await self.llm_summary_by_topic.generate_response_async(
+                prompt, request_type="memory_gen_hier_summary"
             )
             if resp and resp.content and resp.content.strip():
                 try:
@@ -547,10 +547,10 @@ class Hippocampus:
         if not prompt:
             return []
         try:
-            resp: Optional[GeminiSDKResponse] = (
-                await self.llm_topic_judge.generate_response_async(
-                    prompt, request_type="memory_extract_topics"
-                )
+            resp: Optional[
+                GeminiSDKResponse
+            ] = await self.llm_topic_judge.generate_response_async(
+                prompt, request_type="memory_extract_topics"
             )
             if not resp or not resp.content:
                 logger.warning("LLM提取主题返回空。")
@@ -691,7 +691,7 @@ class Hippocampus:
                 txt, request_type="memory_semantic_seed_query_embed"
             )
             if query_text_embedding:
-                logger.debug(f"开始基于输入文本嵌入查找语义相似的种子节点...")
+                logger.debug("开始基于输入文本嵌入查找语义相似的种子节点...")
                 candidate_semantic_seeds = []
                 for node_name_iter, attr_iter in self.memory_graph.G.nodes(data=True):
                     node_concept_embedding = attr_iter.get("embedding")
@@ -1013,7 +1013,7 @@ class Hippocampus:
             if len(unique_final_mems) >= max_mem:
                 break
         logger.info(
-            f"记忆检索完成 (基于 {retrieval_summary_level} & 激活分数组合预选, 输出 {output_summary_level}), 找到{len(unique_final_mems)}条。耗时:{time.time()-start_t:.3f}s"
+            f"记忆检索完成 (基于 {retrieval_summary_level} & 激活分数组合预选, 输出 {output_summary_level}), 找到{len(unique_final_mems)}条。耗时:{time.time() - start_t:.3f}s"
         )
         return unique_final_mems
 

@@ -207,14 +207,12 @@ class PetWindow(QWidget):
     @pyqtSlot()
     def handle_hide_request(self):
         """Public slot to hide the window, for screenshot grabbing."""
-        self.setWindowOpacity(0.0)
+        self.hide()
 
     @pyqtSlot()
     def handle_show_request(self):
         """Public slot to show the window after a screenshot."""
-        self.setWindowOpacity(1.0)
-        if not self.isVisible():
-            self.show()
+        self.show()
         self.activateWindow()
         self.raise_()
 

@@ -1,10 +1,9 @@
 from google import genai
 from google.genai import types
-from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 import json
 import re
 from pydantic import BaseModel, Field, ValidationError
-from typing import Literal, List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 import logging
 import asyncio
 import os
@@ -172,7 +171,7 @@ class GeminiClient:
                 last_exception = e
                 error_str = str(e).lower()
                 logger.warning(
-                    f"GeminiClient: 请求失败 (Attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}"
+                    f"GeminiClient: 请求失败 (Attempt {attempt + 1}/{max_retries}): {type(e).__name__} - {e}"
                 )
                 is_rate_limit = (
                     "rate limit" in error_str
@@ -315,7 +314,7 @@ class GeminiClient:
                     if full_text_parts:
                         llm_output_text = "".join(full_text_parts)
                         logger.debug(
-                            f"GeminiClient: 从candidates[0].content.parts提取并合并得到主要文本 (send_message)"
+                            "GeminiClient: 从candidates[0].content.parts提取并合并得到主要文本 (send_message)"
                         )
             if llm_output_text is None:
                 logger.warning(
@@ -822,7 +821,9 @@ class GeminiClient:
                 )
             if not str(
                 final_fallback_text
-            ).strip() or "未能从LLM响应中提取到主要文本内容" in str(final_fallback_text):
+            ).strip() or "未能从LLM响应中提取到主要文本内容" in str(
+                final_fallback_text
+            ):
                 final_fallback_text = "抱歉，我好像有点混乱，无法正确理解我的思路。"
             if "BlockReason=" in feedback_info and not any(
                 reason in feedback_info.upper()

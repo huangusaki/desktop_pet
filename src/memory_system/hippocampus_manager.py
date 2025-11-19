@@ -93,7 +93,7 @@ class HippocampusManager:
                 )
                 logger.info(
                     f"--- 记忆系统配置: 构建(样本数:{h_cfg.build_memory_sample_num}), "
-                    f"遗忘(比例:{h_cfg.memory_forget_percentage*100:.2f}%), 整合(比例:{h_cfg.consolidate_memory_percentage*100:.2f}%), "
+                    f"遗忘(比例:{h_cfg.memory_forget_percentage * 100:.2f}%), 整合(比例:{h_cfg.consolidate_memory_percentage * 100:.2f}%), "
                     f"嵌入模型({llm_emb_name}), 当前图({nodes}节点,{edges}边) ---"
                 )
         except Exception as e:

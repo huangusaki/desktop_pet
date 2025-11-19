@@ -7,7 +7,7 @@ from .memory_config import MemoryConfig
 from .hippocampus_graph import MemoryGraph
 from .hippocampus_utils import calculate_information_content, cosine_similarity
 from datetime import datetime
-from typing import Optional, List, Tuple, Set, Dict, Any, TYPE_CHECKING
+from typing import Optional, List, Tuple, Dict, TYPE_CHECKING
 from itertools import combinations
 
 logger = logging.getLogger("memory_system.processing")
@@ -25,7 +25,6 @@ if not logger.hasHandlers():
         logger.propagate = False
 if TYPE_CHECKING:
     from .hippocampus_core_logic import Hippocampus
-    from .hippocampus_io import EntorhinalCortex
 
 
 class ParahippocampalGyrus:
@@ -102,10 +101,10 @@ class ParahippocampalGyrus:
         for i, messages_in_sample in enumerate(memory_samples):
             sample_process_start_time = time.time()
             logger.info(
-                f"处理样本 {i+1}/{len(memory_samples)}. 原始消息数: {len(messages_in_sample) if messages_in_sample else 'None'}"
+                f"处理样本 {i + 1}/{len(memory_samples)}. 原始消息数: {len(messages_in_sample) if messages_in_sample else 'None'}"
             )
             if not messages_in_sample:
-                logger.info(f"样本 {i+1} 为空，跳过。")
+                logger.info(f"样本 {i + 1} 为空，跳过。")
                 continue
             input_text_for_sample, earliest_ts, latest_ts, valid_msgs_count = (
                 "",
@@ -126,14 +125,15 @@ class ParahippocampalGyrus:
                     latest_ts = max(latest_ts, ts)
                     valid_msgs_count += 1
             if not input_text_for_sample.strip() or valid_msgs_count == 0:
-                logger.info(f"样本 {i+1} 无有效文本内容或消息，跳过LLM处理。")
+                logger.info(f"样本 {i + 1} 无有效文本内容或消息，跳过LLM处理。")
                 continue
             processed_sample_count += 1
             time_info_for_summary = "时间未知"
             if earliest_ts != float("inf"):
-                e_dt, l_dt = datetime.fromtimestamp(
-                    earliest_ts
-                ), datetime.fromtimestamp(latest_ts)
+                e_dt, l_dt = (
+                    datetime.fromtimestamp(earliest_ts),
+                    datetime.fromtimestamp(latest_ts),
+                )
                 time_info_for_summary = (
                     f"{e_dt.year}年, {e_dt.strftime('%m月%d日 %H:%M')}到{l_dt.strftime('%m月%d日 %H:%M')}"
                     if e_dt.year == l_dt.year
@@ -148,13 +148,13 @@ class ParahippocampalGyrus:
                     input_text_for_sample, self.config.memory_compress_rate
                 )
             except Exception as e:
-                logger.error(f"样本 {i+1} 提取主题和相似项失败: {e}", exc_info=True)
+                logger.error(f"样本 {i + 1} 提取主题和相似项失败: {e}", exc_info=True)
                 continue
             if not topic_to_embedding_map:
-                logger.info(f"样本 {i+1} 未提取到有效主题。")
+                logger.info(f"样本 {i + 1} 未提取到有效主题。")
                 continue
             logger.info(
-                f"样本 {i+1}: 提取到 {len(topic_to_embedding_map)} 个主题，将为它们生成层级摘要。"
+                f"样本 {i + 1}: 提取到 {len(topic_to_embedding_map)} 个主题，将为它们生成层级摘要。"
             )
             newly_added_or_updated_topics_in_this_sample = []
             for (
@@ -170,7 +170,7 @@ class ParahippocampalGyrus:
                     )
                 except Exception as e:
                     logger.error(
-                        f"为主题 '{topic_concept}' (样本 {i+1}) 生成层级摘要文本时出错: {e}",
+                        f"为主题 '{topic_concept}' (样本 {i + 1}) 生成层级摘要文本时出错: {e}",
                         exc_info=True,
                     )
                     continue
@@ -178,7 +178,7 @@ class ParahippocampalGyrus:
                     hierarchical_summaries_text_only.values()
                 ):
                     logger.warning(
-                        f"主题 '{topic_concept}' (样本 {i+1}) 的层级摘要文本为空或无效。"
+                        f"主题 '{topic_concept}' (样本 {i + 1}) 的层级摘要文本为空或无效。"
                     )
                     continue
                 hierarchical_summaries_with_embeddings: Dict[
@@ -224,10 +224,10 @@ class ParahippocampalGyrus:
                     )[1]
                 ):
                     logger.warning(
-                        f"主题 '{topic_concept}' (样本 {i+1}) 关键层级摘要(如L1)未能成功获取嵌入，跳过此主题。"
+                        f"主题 '{topic_concept}' (样本 {i + 1}) 关键层级摘要(如L1)未能成功获取嵌入，跳过此主题。"
                     )
                     continue
-                current_event_id = f"event_{i}_{topic_concept.replace(' ','_')}_{str(uuid.uuid4())[:8]}"
+                current_event_id = f"event_{i}_{topic_concept.replace(' ', '_')}_{str(uuid.uuid4())[:8]}"
                 source_details = {
                     "sample_index": i,
                     "valid_message_count": valid_msgs_count,
@@ -263,7 +263,7 @@ class ParahippocampalGyrus:
                                 )
                             )
             logger.info(
-                f"样本 {i+1} 处理耗时: {time.time() - sample_process_start_time:.2f}s"
+                f"样本 {i + 1} 处理耗时: {time.time() - sample_process_start_time:.2f}s"
             )
         if processed_sample_count > 0 and (
             added_nodes_concepts or connected_edges_pairs
@@ -338,7 +338,7 @@ class ParahippocampalGyrus:
                     self.memory_graph.G[u][v]["strength"] = current_strength
                     self.memory_graph.G[u][v]["last_modified"] = current_timestamp
                     edge_changes["weakened"].append(
-                        f"{u}-{v} (S:{current_strength+1}->{current_strength})"
+                        f"{u}-{v} (S:{current_strength + 1}->{current_strength})"
                     )
         for node_name in nodes_sample_for_forget:
             if node_name not in self.memory_graph.G:
@@ -558,16 +558,16 @@ class ParahippocampalGyrus:
                     for idx, event in enumerate(current_memory_events_in_node)
                     if idx not in indices_to_remove_from_original_list
                 ]
-                self.memory_graph.G.nodes[node_name][
-                    "memory_events"
-                ] = new_memory_events_for_node
-                self.memory_graph.G.nodes[node_name][
-                    "last_modified"
-                ] = current_timestamp
+                self.memory_graph.G.nodes[node_name]["memory_events"] = (
+                    new_memory_events_for_node
+                )
+                self.memory_graph.G.nodes[node_name]["last_modified"] = (
+                    current_timestamp
+                )
             elif node_name in nodes_modified_by_consolidation:
-                self.memory_graph.G.nodes[node_name][
-                    "last_modified"
-                ] = current_timestamp
+                self.memory_graph.G.nodes[node_name]["last_modified"] = (
+                    current_timestamp
+                )
         if total_consolidation_actions > 0:
             logger.info(
                 f"记忆整合共执行了 {total_consolidation_actions} 次事件合并（移除）操作，"

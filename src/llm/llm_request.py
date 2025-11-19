@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 from datetime import datetime
 from typing import Tuple, Union, List, Dict, Any, Optional
@@ -129,7 +128,7 @@ def compress_base64_image_by_scale(
             if len(compressed_data_loop) <= target_size:
                 final_format_check = Image.open(io.BytesIO(compressed_data_loop)).format
                 logger.info(
-                    f"压缩图片 (尝试 {attempt+1}): {original_width}x{original_height} ({img.format or 'N/A'} -> {final_format_check or img_format_to_save}). "
+                    f"压缩图片 (尝试 {attempt + 1}): {original_width}x{original_height} ({img.format or 'N/A'} -> {final_format_check or img_format_to_save}). "
                     f"大小: {len(image_data) / 1024:.1f}KB -> {len(compressed_data_loop) / 1024:.1f}KB (目标: {target_size / 1024:.1f}KB)"
                 )
                 return base64.b64encode(compressed_data_loop).decode("utf-8")
@@ -138,7 +137,7 @@ def compress_base64_image_by_scale(
             else:
                 scale *= 0.85
             logger.info(
-                f"压缩后仍然过大 (尝试 {attempt+1}, {len(compressed_data_loop)/1024:.1f}KB). 下次 scale={scale:.2f}, quality={current_quality}"
+                f"压缩后仍然过大 (尝试 {attempt + 1}, {len(compressed_data_loop) / 1024:.1f}KB). 下次 scale={scale:.2f}, quality={current_quality}"
             )
         logger.warning(
             f"多次压缩后大小 {len(compressed_data_to_return_if_loop_fails) / 1024:.1f}KB 仍大于目标 {target_size / 1024:.1f}KB. 返回当前最佳压缩结果。"
@@ -455,7 +454,7 @@ class LLM_request:
         for attempt in range(max_retries):
             try:
                 logger.debug(
-                    f"Attempt {attempt+1}/{max_retries} - Google SDK ({self.model_name}) using Key #{self.current_key_index + 1}"
+                    f"Attempt {attempt + 1}/{max_retries} - Google SDK ({self.model_name}) using Key #{self.current_key_index + 1}"
                 )
                 if is_embedding:
                     if not isinstance(contents, str):
@@ -639,7 +638,7 @@ class LLM_request:
                 import traceback
 
                 logger.warning(
-                    f"Google SDK ({self.model_name}) 失败 (尝试 {attempt+1}/{max_retries}): {type(e).__name__} - {e}\n{traceback.format_exc()}"
+                    f"Google SDK ({self.model_name}) 失败 (尝试 {attempt + 1}/{max_retries}): {type(e).__name__} - {e}\n{traceback.format_exc()}"
                 )
                 is_rate_limit_typed = ResourceExhaustedException and isinstance(
                     e, ResourceExhaustedException
@@ -763,7 +762,7 @@ class LLM_request:
             try:
                 async with aiohttp.ClientSession(headers=headers) as session:
                     logger.debug(
-                        f"Attempt {attempt+1}/{max_retries} - HTTP POST to {api_url} using Key ...{current_api_key[-4:] if current_api_key else 'N/A'}"
+                        f"Attempt {attempt + 1}/{max_retries} - HTTP POST to {api_url} using Key ...{current_api_key[-4:] if current_api_key else 'N/A'}"
                     )
                     timeout_seconds = self.params.get("http_timeout_seconds", 30)
                     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -809,7 +808,7 @@ class LLM_request:
             except aiohttp.ClientResponseError as e:
                 last_exception = e
                 logger.warning(
-                    f"HTTP POST 请求失败 (尝试 {attempt+1}/{max_retries}): {e.status} {e.message} for URL {api_url}"
+                    f"HTTP POST 请求失败 (尝试 {attempt + 1}/{max_retries}): {e.status} {e.message} for URL {api_url}"
                 )
                 if e.status == 401 or e.status == 403:
                     self._record_usage(
@@ -852,7 +851,7 @@ class LLM_request:
             except asyncio.TimeoutError as e_timeout:
                 last_exception = e_timeout
                 logger.warning(
-                    f"HTTP POST 请求超时 (尝试 {attempt+1}/{max_retries}) for URL {api_url}"
+                    f"HTTP POST 请求超时 (尝试 {attempt + 1}/{max_retries}) for URL {api_url}"
                 )
                 if attempt < max_retries - 1:
                     base_wait = self.params.get("base_retry_wait_seconds", 5)
@@ -875,7 +874,7 @@ class LLM_request:
             except Exception as e_generic:
                 last_exception = e_generic
                 logger.error(
-                    f"HTTP POST 请求中发生一般错误 (尝试 {attempt+1}/{max_retries}): {type(e_generic).__name__} - {e_generic} for URL {api_url}"
+                    f"HTTP POST 请求中发生一般错误 (尝试 {attempt + 1}/{max_retries}): {type(e_generic).__name__} - {e_generic} for URL {api_url}"
                 )
                 if attempt < max_retries - 1:
                     base_wait = self.params.get("base_retry_wait_seconds", 3)

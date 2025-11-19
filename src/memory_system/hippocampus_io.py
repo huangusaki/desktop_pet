@@ -1,8 +1,6 @@
-import asyncio
-import random
 import time
 from datetime import datetime
-from pymongo import UpdateOne, ASCENDING, DESCENDING
+from pymongo import UpdateOne, ASCENDING
 from pymongo.errors import BulkWriteError
 from pymongo.database import Database
 from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
@@ -555,7 +553,7 @@ class EntorhinalCortex:
                 items_needing_hier_summary_emb
             )
         logger.info(
-            f"从DB同步记忆完成。加载 {len(self.memory_graph.G.nodes())} 节点, {len(self.memory_graph.G.edges())} 边。耗时: {time.time()-start_time:.3f}s"
+            f"从DB同步记忆完成。加载 {len(self.memory_graph.G.nodes())} 节点, {len(self.memory_graph.G.edges())} 边。耗时: {time.time() - start_time:.3f}s"
         )
         total_summary_levels_to_update = sum(
             len(v)

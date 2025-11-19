@@ -3,17 +3,30 @@ import os
 import asyncio
 import threading
 import coloredlogs
-from typing import Optional, Any
+import logging
+from typing import Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PIL import Image
-from src.utils.application_context import ApplicationContext
 from pathlib import Path
-import logging
+
+# 尝试尽早导入 WebEngine 以避免后续卡死
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    print("WebEngine loaded successfully in main")
+except ImportError:
+    print("WebEngine not found or failed to load in main")
+
+script_file_path = Path(__file__).resolve()
+project_root = str(script_file_path.parent.parent)
+
+# 添加项目根目录到Python路径
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from src.utils.application_context import ApplicationContext
 
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.multimedia.ffmpeg=false"
 logger = logging.getLogger("main")
-script_file_path = Path(__file__).resolve()
-project_root = str(script_file_path.parent.parent)
 
 
 class AsyncioHelper:

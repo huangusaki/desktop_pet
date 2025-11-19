@@ -8,6 +8,7 @@ from PyQt6.QtGui import QGuiApplication
 from PIL import Image, ImageDraw, ImageFont
 from src.gui.chat_dialog import ChatDialog
 
+
 logger = logging.getLogger("ApplicationContext")
 
 
@@ -102,6 +103,7 @@ class GuiComponents:
 
     pet_window: Optional[Any] = None
     chat_dialog: Optional[ChatDialog] = None
+    web_chat_window: Optional[Any] = None
     screen_analyzer: Optional[Any] = None
     memory_build_timer: Optional[QTimer] = None
     memory_forget_timer: Optional[QTimer] = None
@@ -114,24 +116,11 @@ class ApplicationContext:
         self.AsyncioHelper = asyncio_helper_class
         self._services: Optional[AppServices] = None
         self._gui: Optional[GuiComponents] = None
+        self._web_server_started = False
+        self._web_server_thread = None
         from src.utils.config_manager import ConfigManager
 
         self._ConfigManagerClass = ConfigManager
-        from src.utils.prompt_builder import PromptBuilder
-
-        self._PromptBuilderClass = PromptBuilder
-        from src.llm.gemini_client import GeminiClient
-
-        self._GeminiClientClass = GeminiClient
-        from src.gui.main_window import PetWindow
-
-        self._PetWindow = PetWindow
-        from src.database.mongo_handler import MongoHandler
-
-        self._MongoHandlerClass = MongoHandler
-        from src.core.screen_analyzer import ScreenAnalyzer
-
-        self._ScreenAnalyzerClass = ScreenAnalyzer
         from src.memory_system.memory_config import MemoryConfig
 
         self._MemoryConfigClass = MemoryConfig
@@ -141,6 +130,27 @@ class ApplicationContext:
         from src.data.relationship_manager import RelationshipManager
 
         self._RelationshipManagerClass = RelationshipManager
+        from src.database.mongo_handler import MongoHandler
+
+        self._MongoHandlerClass = MongoHandler
+        from src.utils.prompt_builder import PromptBuilder
+
+        self._PromptBuilderClass = PromptBuilder
+        from src.llm.gemini_client import GeminiClient
+
+        self._GeminiClientClass = GeminiClient
+        from src.gui.main_window import PetWindow
+
+        self._PetWindow = PetWindow
+        from src.gui.chat_dialog import ChatDialog
+
+        self._ChatDialog = ChatDialog
+        from src.core.screen_analyzer import ScreenAnalyzer
+
+        self._ScreenAnalyzerClass = ScreenAnalyzer
+        from src.gui.web_chat_window import WebChatWindow
+
+        self._WebChatWindowClass = WebChatWindow
         try:
             from src.core.agent_core import AgentCore as AgentCore_Import
 
@@ -148,6 +158,8 @@ class ApplicationContext:
         except ImportError:
             self._AgentCoreClass = None
             logger.warning("ApplicationContext: AgentCore could not be imported.")
+            
+        logger.info("ApplicationContext initialization complete")
 
     def run(self) -> bool:
         init_future = self.AsyncioHelper.schedule_task(self._create_services())
@@ -184,6 +196,12 @@ class ApplicationContext:
             logger.critical("Main: GUI components initialization failed. Exiting.")
             return False
         self._connect_signals()
+        
+        # 启动Web服务器（在显示窗口之前）
+        logger.info("Starting web server...")
+        self._start_web_server()
+        self._web_server_started = True
+        
         self._perform_startup_tasks(app)
         initial_message = self._get_initial_pet_message()
         self._gui.pet_window.update_speech_and_emotion(initial_message, "default")
@@ -191,6 +209,7 @@ class ApplicationContext:
         return True
 
     async def _create_services(self) -> Optional[AppServices]:
+        logger.info("Creating services...")
         os.makedirs(os.path.join(self.project_root, "config"), exist_ok=True)
         assets_path = os.path.normpath(os.path.join(self.project_root, "src", "assets"))
         os.makedirs(assets_path, exist_ok=True)
@@ -204,31 +223,24 @@ class ApplicationContext:
             try:
                 with open(config_path, "w", encoding="utf-8") as cf:
                     cf.write("; Please fill in your API keys and settings.\n")
-                QMessageBox.information(
-                    None,
-                    "Config File Created",
-                    f"A template config file was created at:\n{config_path}\n\nPlease configure it and restart the application.",
-                )
+                logger.info(f"Config template created at {config_path}")
                 return None
             except IOError as e:
-                QMessageBox.critical(
-                    None, "Error", f"Could not create config file: {e}"
-                )
+                logger.error(f"Could not create config file: {e}")
                 return None
         try:
+            logger.info("Initializing ConfigManager...")
             config_manager = self._ConfigManagerClass(config_file=config_path)
+            logger.info("ConfigManager initialized")
         except Exception as e:
             logger.error(f"ConfigManager initialization failed: {e}", exc_info=True)
-            QMessageBox.critical(
-                None,
-                "Config Error",
-                f"Error loading config file: {e}\nApplication will exit.",
-            )
             return None
         if http_proxy := config_manager.get_http_proxy():
             os.environ["HTTP_PROXY"] = http_proxy
         if https_proxy := config_manager.get_https_proxy():
             os.environ["HTTPS_PROXY"] = https_proxy
+        
+        logger.info("Setting up avatar paths...")
         avatar_base_path = os.path.normpath(
             os.path.join(
                 self.project_root, config_manager.get_avatar_base_path_relative()
@@ -245,6 +257,7 @@ class ApplicationContext:
             _create_placeholder_avatar(pet_avatar_path, "P")
         if not os.path.exists(user_avatar_path):
             _create_placeholder_avatar(user_avatar_path, "U")
+        
         services = AppServices(
             config_manager=config_manager,
             available_emotions=available_emotions,
@@ -253,6 +266,8 @@ class ApplicationContext:
             pet_avatar_path=pet_avatar_path,
             user_avatar_path=user_avatar_path,
         )
+        
+        logger.info("Initializing MongoHandler...")
         try:
             mongo_handler = self._MongoHandlerClass(
                 config_manager.get_mongo_connection_string(),
@@ -261,20 +276,14 @@ class ApplicationContext:
             )
             if mongo_handler.is_connected():
                 services.mongo_handler = mongo_handler
+                logger.info("MongoHandler connected")
             else:
-                QMessageBox.warning(
-                    None,
-                    "MongoDB Connection Warning",
-                    "Could not connect to MongoDB. Chat history and memory system features will be limited.",
-                )
+                logger.warning("MongoHandler failed to connect")
         except Exception as e:
-            QMessageBox.warning(
-                None,
-                "MongoDB Init Error",
-                f"An error occurred while initializing MongoDB: {e}.",
-            )
             logger.critical(f"MongoDB initialization exception: {e}", exc_info=True)
+        
         if services.mongo_handler:
+            logger.info("Initializing RelationshipManager...")
             services.relationship_manager = self._RelationshipManagerClass(
                 mongo_handler=services.mongo_handler,
                 user_name=config_manager.get_user_name(),
@@ -284,18 +293,18 @@ class ApplicationContext:
             logger.error(
                 "Cannot initialize RelationshipManager because MongoDB is not connected."
             )
+        
+        logger.info("Initializing PromptBuilder...")
         services.prompt_builder = self._PromptBuilderClass(
             config_manager=config_manager,
             relationship_manager=services.relationship_manager,
         )
+        
+        logger.info("Initializing GeminiClient...")
         try:
             api_key = config_manager.get_gemini_api_key()
             if not api_key or api_key == "YOUR_API_KEY_HERE":
-                QMessageBox.critical(
-                    None,
-                    "API Key Error",
-                    "Please configure the main chat Gemini API Key in config/settings.ini.",
-                )
+                logger.critical("API Key Error: Please configure the main chat Gemini API Key in config/settings.ini.")
                 return None
             services.gemini_client = self._GeminiClientClass(
                 api_key=api_key,
@@ -308,22 +317,27 @@ class ApplicationContext:
                 mongo_handler=services.mongo_handler,
                 config_manager=config_manager,
             )
+            logger.info("GeminiClient initialized")
         except Exception as e:
-            QMessageBox.critical(None, "Gemini Client Init Error", f"Error: {e}")
             logger.critical(
                 f"Gemini client initialization exception: {e}", exc_info=True
             )
             return None
+            
         if self._AgentCoreClass and services.gemini_client:
+            logger.info("Initializing AgentCore...")
             try:
                 services.agent_core = self._AgentCoreClass(
                     config_manager=config_manager,
                     prompt_builder=services.prompt_builder,
                     gemini_client=services.gemini_client,
                 )
+                logger.info("AgentCore initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize AgentCore: {e}", exc_info=True)
+                
         if self._HippocampusManagerClass and services.mongo_handler:
+            logger.info("Initializing HippocampusManager...")
             try:
                 mem_config = self._MemoryConfigClass.from_config_manager(config_manager)
                 hippocampus_manager = await self._HippocampusManagerClass.get_instance()
@@ -365,6 +379,7 @@ class ApplicationContext:
         )
         if not os.path.exists(initial_pet_image_path):
             _create_placeholder_avatar(initial_pet_image_path, "Pet", size=(120, 120))
+            
         pet_window = self._PetWindow(
             initial_image_path=initial_pet_image_path,
             assets_base_path=services.assets_path,
@@ -372,6 +387,25 @@ class ApplicationContext:
             config_manager=services.config_manager,
             agent_core=services.agent_core,
         )
+        
+        # Preload WebChatWindow for instant opening
+        logger.info("Preloading WebChatWindow...")
+        try:
+            if hasattr(self, '_WebChatWindowClass') and self._WebChatWindowClass:
+                WebChatWindow = self._WebChatWindowClass
+            else:
+                from src.gui.web_chat_window import WebChatWindow
+                
+            web_chat_window = WebChatWindow(
+                url="http://localhost:8765",
+                parent=pet_window,
+                avatar_path=services.pet_avatar_path
+            )
+            logger.info("WebChatWindow preloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to preload WebChatWindow: {e}")
+            web_chat_window = None
+
         screen_analyzer = None
         screen_analysis_available = False
         if (
@@ -398,7 +432,10 @@ class ApplicationContext:
             screen_analysis_enabled=services.config_manager.get_screen_analysis_enabled(),
             agent_core_available=services.agent_core is not None,
         )
-        return GuiComponents(pet_window=pet_window, screen_analyzer=screen_analyzer)
+        
+        gui = GuiComponents(pet_window=pet_window, screen_analyzer=screen_analyzer)
+        gui.web_chat_window = web_chat_window
+        return gui
 
     def _connect_signals(self):
         """Manages all signal-slot connections between components."""
@@ -427,6 +464,119 @@ class ApplicationContext:
             self._gui.pet_window.screen_analysis_toggled_signal.connect(
                 self._gui.screen_analyzer.set_monitoring_state
             )
+    def open_chat_dialog_handler(self):
+        """打开聊天窗口 - 使用PyQt WebEngine窗口"""
+        try:
+            if not self._gui or not self._services:
+                return
+            
+            logger.info("Opening web chat window...")
+            
+            # Web服务器已经在启动时运行了，直接显示窗口
+            self._show_web_chat_window()
+            
+        except Exception as e:
+            logger.error(f"Error opening web chat window: {e}", exc_info=True)
+            QMessageBox.warning(
+                None,
+                "无法打开聊天窗口",
+                f"打开聊天窗口时出错: {e}"
+            )
+    
+    def _show_web_chat_window(self):
+        """显示Web聊天窗口"""
+        try:
+            logger.info("Entering _show_web_chat_window")
+            # 创建或显示WebEngine窗口
+            if not hasattr(self._gui, 'web_chat_window') or self._gui.web_chat_window is None:
+                logger.info("Creating WebChatWindow instance...")
+                
+                if hasattr(self, '_WebChatWindowClass') and self._WebChatWindowClass:
+                    WebChatWindow = self._WebChatWindowClass
+                else:
+                    logger.warning("WebChatWindowClass not preloaded, importing now...")
+                    from src.gui.web_chat_window import WebChatWindow
+                
+                self._gui.web_chat_window = WebChatWindow(
+                    url="http://localhost:8765",
+                    parent=self._gui.pet_window,
+                    avatar_path=self._services.pet_avatar_path
+                )
+                logger.info("WebChatWindow instance created")
+            
+            # 确保窗口没有被最小化或隐藏
+            if self._gui.web_chat_window.isHidden():
+                self._gui.web_chat_window.show()
+            
+            self._gui.web_chat_window.raise_()
+            self._gui.web_chat_window.activateWindow()
+            
+            logger.info("Calculating window position...")
+            # 定位窗口在宠物旁边
+            if self._gui.pet_window:
+                pet_geo = self._gui.pet_window.geometry()
+                screen_geometry = self._gui.pet_window.screen().availableGeometry()
+                
+                window_width = self._gui.web_chat_window.width()
+                window_height = self._gui.web_chat_window.height()
+                
+                # 默认显示在宠物右侧
+                new_x = pet_geo.x() + pet_geo.width() + 20
+                new_y = pet_geo.y()
+                
+                # 如果右侧放不下，放左侧
+                if new_x + window_width > screen_geometry.right():
+                    new_x = pet_geo.x() - window_width - 20
+                
+                # 确保不超出屏幕边界
+                if new_y + window_height > screen_geometry.bottom():
+                    new_y = screen_geometry.bottom() - window_height
+                if new_y < screen_geometry.top():
+                    new_y = screen_geometry.top()
+                
+                self._gui.web_chat_window.move(new_x, new_y)
+            
+            logger.info("Web chat window opened successfully")
+        except Exception as e:
+            logger.error(f"Error showing web chat window: {e}", exc_info=True)
+
+    def _start_web_server(self):
+        """在后台线程启动FastAPI Web服务器"""
+        try:
+            from src.web import create_app
+            import uvicorn
+            import threading
+            
+            logger.info("Starting Web server for chat interface...")
+            
+            # 创建FastAPI应用
+            app = create_app(self._services)
+            
+            # 在后台线程运行服务器
+            def run_server():
+                try:
+                    uvicorn.run(
+                        app,
+                        host="0.0.0.0",  # 允许手机访问
+                        port=8765,
+                        log_level="info"
+                    )
+                except Exception as e:
+                    logger.error(f"Web server error: {e}", exc_info=True)
+            
+            self._web_server_thread = threading.Thread(target=run_server, daemon=True)
+            self._web_server_thread.start()
+            
+            logger.info("Web server started on http://localhost:8765")
+            logger.info("You can also access from mobile: http://<your-ip>:8765")
+            
+        except Exception as e:
+            logger.error(f"Failed to start web server: {e}", exc_info=True)
+            QMessageBox.critical(
+                None,
+                "Web服务器启动失败",
+                f"无法启动Web聊天服务器: {e}\n\n请检查端口8765是否被占用。"
+            )
 
     def _perform_startup_tasks(self, app: QApplication):
         """Schedules background tasks like memory maintenance and screen analysis."""
@@ -448,73 +598,6 @@ class ApplicationContext:
         if (run_consolidate or run_build) and self._services.hippocampus_manager:
             self.AsyncioHelper.schedule_task(_startup_tasks())
         self._schedule_memory_tasks(app)
-
-    def open_chat_dialog_handler(self):
-        if not self._gui or not self._services:
-            return
-        if self._gui.chat_dialog is None:
-            if not all(
-                [
-                    self._services.config_manager,
-                    self._services.gemini_client,
-                    self._services.mongo_handler,
-                ]
-            ):
-                QMessageBox.warning(
-                    None,
-                    "Services Not Ready",
-                    "One or more services required to create the chat window have not been initialized.",
-                )
-                return
-            self._gui.chat_dialog = ChatDialog(
-                gemini_client=self._services.gemini_client,
-                mongo_handler=self._services.mongo_handler,
-                config_manager=self._services.config_manager,
-                pet_name=self._services.config_manager.get_pet_name(),
-                user_name=self._services.config_manager.get_user_name(),
-                pet_avatar_path=self._services.pet_avatar_path,
-                user_avatar_path=self._services.user_avatar_path,
-                hippocampus_manager=self._services.hippocampus_manager,
-                relationship_manager=self._services.relationship_manager,
-                agent_core=self._services.agent_core,
-                parent=self._gui.pet_window,
-                asyncio_helper=self.AsyncioHelper,
-            )
-            self._gui.chat_dialog.speech_and_emotion_received.connect(
-                self._gui.pet_window.update_speech_and_emotion
-            )
-            self._gui.pet_window.agent_mode_toggled_signal.connect(
-                self._gui.chat_dialog.set_agent_mode_active
-            )
-            if self._gui.screen_analyzer:
-                self._gui.chat_dialog.chat_text_for_tts_ready.connect(
-                    self._gui.screen_analyzer.play_tts_from_chat
-                )
-        if self._services.agent_core and hasattr(
-            self._services.agent_core, "is_agent_mode_active"
-        ):
-            self._gui.chat_dialog.set_agent_mode_active(
-                self._services.agent_core.is_agent_mode_active
-            )
-        if self._gui.chat_dialog.isHidden():
-            if self._gui.pet_window:
-                pet_rect = self._gui.pet_window.geometry()
-                self._gui.chat_dialog.adjustSize()
-                chat_dialog_size = self._gui.chat_dialog.size()
-                screen_geometry = QGuiApplication.primaryScreen().availableGeometry()
-                new_x = pet_rect.x()
-                new_y = pet_rect.y() - chat_dialog_size.height() - 5
-                if new_y < screen_geometry.y():
-                    new_y = pet_rect.y() + pet_rect.height() + 5
-                if new_x + chat_dialog_size.width() > screen_geometry.right():
-                    new_x = screen_geometry.right() - chat_dialog_size.width()
-                if new_x < screen_geometry.left():
-                    new_x = screen_geometry.left()
-                self._gui.chat_dialog.move(new_x, new_y)
-            self._gui.chat_dialog.open_dialog()
-        else:
-            self._gui.chat_dialog.activateWindow()
-            self._gui.chat_dialog.raise_()
 
     def handle_agent_mode_toggled(self, is_active: bool):
         if self._services.agent_core and hasattr(

@@ -6,7 +6,6 @@ import tempfile
 import collections
 from typing import Optional, List, Dict, Any
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer, QUrl, pyqtSlot
-from PyQt6.QtWidgets import QApplication
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from ..utils.prompt_builder import PromptBuilder
 from ..utils.tts_request_worker import TTSRequestWorker
@@ -169,7 +168,7 @@ class ScreenAnalysisWorker(QObject):
                 self.error_occurred.emit(
                     f"Invalid response from Gemini: {response_data}"
                 )
-        except Exception as e_process_llm:
+        except Exception:
             raise
 
 
@@ -234,7 +233,7 @@ class ScreenAnalyzer(QObject):
         self._analysis_chance = self.config_manager.get_screen_analysis_chance()
         self.tts_enabled_globally = self.config_manager.get_tts_enabled()
         logger.info(
-            f"Config: 屏幕截图={self._is_enabled}, 最小触发时间={min_interval_seconds}s,最大触发时间={max_interval_seconds}s, 触发概率={self._analysis_chance*100}%, TTS开启状态={self.tts_enabled_globally}"
+            f"Config: 屏幕截图={self._is_enabled}, 最小触发时间={min_interval_seconds}s,最大触发时间={max_interval_seconds}s, 触发概率={self._analysis_chance * 100}%, TTS开启状态={self.tts_enabled_globally}"
         )
 
     @pyqtSlot(bool)

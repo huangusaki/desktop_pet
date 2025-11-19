@@ -1,7 +1,6 @@
 import html
 import os
 import asyncio
-import sys
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -9,7 +8,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QHBoxLayout,
-    QApplication,
     QWidget,
     QFileDialog,
     QLabel,
@@ -625,7 +623,7 @@ class ChatDialog(QDialog):
             self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
         self._update_window_title_and_placeholder()
         if self.is_agent_mode_active_chat:
-            agent_welcome_html = f"<div style='padding:20px 0; color:#aaa; text-align:center;'><i>Agent模式已激活。输入指令进行交互。\nAgent交互不会被保存到聊天记录。</i></div>"
+            agent_welcome_html = "<div style='padding:20px 0; color:#aaa; text-align:center;'><i>Agent模式已激活。输入指令进行交互。\nAgent交互不会被保存到聊天记录。</i></div>"
             self.chat_display.setHtml(agent_welcome_html)
         else:
             history_for_display = self._get_raw_chat_history_for_display()

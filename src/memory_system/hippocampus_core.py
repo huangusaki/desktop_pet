@@ -11,6 +11,7 @@ from .hippocampus_io import EntorhinalCortex
 from .hippocampus_processing import ParahippocampalGyrus
 from .hippocampus_core_logic import Hippocampus
 from .hippocampus_manager import HippocampusManager
+from .memory_config import MemoryConfig
 from ..llm.llm_request import LLM_request, GeminiSDKResponse
 
 __all__ = [

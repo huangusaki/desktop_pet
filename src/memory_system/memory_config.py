@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from ..utils.config_manager import ConfigManager
 import logging
 
@@ -99,7 +99,7 @@ class MemoryConfig:
                 )
             if raw_val is not None:
                 try:
-                    if param_type == bool:
+                    if param_type is bool:
                         if raw_val.lower() in ["true", "yes", "1"]:
                             return True
                         elif raw_val.lower() in ["false", "no", "0"]:

@@ -1,4 +1,4 @@
-from pymongo import MongoClient, DESCENDING, UpdateOne
+from pymongo import MongoClient, DESCENDING
 from pymongo.database import Database
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
@@ -34,10 +34,14 @@ class MongoHandler:
 
     def _connect(self):
         try:
+            logger.info(f"Attempting to connect to MongoDB: {self.connection_string}")
             self.client = MongoClient(
                 self.connection_string, serverSelectionTimeoutMS=5000
             )
+            logger.info("MongoClient created, sending ping command...")
             self.client.admin.command("ping")
+            logger.info("MongoDB ping successful!")
+            
             self.db = self.client[self.database_name]
             self.chat_collection = self.db[self.chat_history_collection_name]
             self.relationship_status_collection = self.db[
@@ -52,22 +56,7 @@ class MongoHandler:
             logger.info(
                 f"成功连接到 MongoDB: {self.connection_string}, 数据库: '{self.database_name}'"
             )
-            logger.info(
-                f"  Chat history collection: '{self.chat_history_collection_name}'"
-            )
-            logger.info(
-                f"  Relationship status collection: '{self.relationship_status_collection_name}'"
-            )
-            logger.info(
-                f"  Graph nodes collection: '{self.graph_nodes_collection_name}'"
-            )
-            logger.info(
-                f"  Graph edges collection: '{self.graph_edges_collection_name}'"
-            )
-            logger.info(f"  LLM usage collection: '{self.llm_usage_collection_name}'")
-            logger.info(
-                f"  Screen analysis log collection: '{self.screen_analysis_log_collection_name}'"
-            )
+            # ... (省略部分日志以减少冗余，保留关键信息)
         except ConnectionFailure as e:
             logger.error(f"无法连接到 MongoDB ({self.connection_string}): {e}")
             self._clear_connections()
