@@ -1,4 +1,4 @@
-# 🎀 Arisu (爱丽丝) - 智能桌面宠物
+# ArisuBot
 
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -6,34 +6,32 @@
 ![MongoDB](https://img.shields.io/badge/MongoDB-Latest-47A248?style=flat-square&logo=mongodb&logoColor=white)
 ![Gemini](https://img.shields.io/badge/AI-Google%20Gemini-8E75B2?style=flat-square)
 
-> **Arisu** 是一个结合了现代 Web 技术与桌面应用能力的智能助手。她不仅是你桌面上的可爱伙伴，更是拥有长期记忆与视觉感知能力的 AI 伴侣。
-
 ---
 
-## ✨ 功能特性 (Features)
+## Features
 
-*   🤖 **深度智能交互**
+*   **深度智能交互**
     *   集成 **Google Gemini** 大语言模型，提供流畅、自然的对话体验。
     *   支持角色扮演 (Roleplay) 与情感反馈系统。
 
-*   🧠 **海马体记忆系统 (Hippocampus Memory)**
+*   **海马体记忆系统 (Hippocampus Memory)**
     *   基于 **NetworkX** 构建的图导向记忆网络。
     *   能够建立概念关联，记住用户的喜好、过往对话及重要信息。
 
-*   👁️ **视觉感知 (Vision Capabilities)**
+*   **视觉感知 (Vision Capabilities)**
     *   具备屏幕截图分析能力，能够“看”懂你当前的工作或娱乐内容并给出建议。
 
-*   💻 **现代化技术栈**
+*   **现代化技术栈**
     *   **前端**: 使用 **React 19** + **TypeScript** + **TailwindCSS** 构建，界面精美流畅。
     *   **后端**: 基于 **FastAPI** 的高性能异步服务。
     *   **桌面端**: **PyQt6** 驱动的桌面悬浮窗，支持透明背景与鼠标穿透。
 
-*   📱 **多端无缝体验**
+*   **多端无缝体验**
     *   内置 Web 服务器，支持局域网内通过手机或浏览器远程访问聊天界面。
 
 ---
 
-## 🛠️ 技术栈 (Tech Stack)
+## Tech Stack
 
 | 领域 | 技术/库 | 说明 |
 | :--- | :--- | :--- |
@@ -47,7 +45,7 @@
 
 ---
 
-## 🚀 快速开始 (Quick Start)
+## Quick Start
 
 ### 1. 环境准备
 
@@ -94,7 +92,7 @@ python -m src.main
 
 ---
 
-## 💻 开发模式 (Development)
+## 开发模式 (Development)
 
 如果你需要修改前端代码并希望实时预览：
 
@@ -114,7 +112,7 @@ npm run dev
 
 ---
 
-## 📂 目录结构
+## 目录结构
 
 ```
 Arisu_gf/
@@ -131,6 +129,6 @@ Arisu_gf/
 
 ---
 
-## 📄 License
+## License
 
 [MIT License](LICENSE)
