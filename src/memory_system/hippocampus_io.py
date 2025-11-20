@@ -35,9 +35,9 @@ class EntorhinalCortex:
         min_snippet_messages = self.config.sample_min_snippet_messages
         max_snippet_messages = self.config.sample_max_snippet_messages
         max_memorized_time = self.config.max_memorized_time_per_msg
-        pet_name_filter = self.hippocampus.bot_name_for_history_filter
+        bot_name_filter = self.hippocampus.bot_name_for_history_filter
         try:
-            query_filter = {"role_play_character": pet_name_filter}
+            query_filter = {"role_play_character": bot_name_filter}
             all_messages_cursor = (
                 self.db[self.hippocampus.chat_collection_name]
                 .find(query_filter)

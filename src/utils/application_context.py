@@ -101,7 +101,7 @@ class AppServices:
 class GuiComponents:
     """A container for all top-level GUI component instances."""
 
-    pet_window: Optional[Any] = None
+    bot_window: Optional[Any] = None
     chat_dialog: Optional[ChatDialog] = None
     web_chat_window: Optional[Any] = None
     screen_analyzer: Optional[Any] = None
@@ -192,7 +192,7 @@ class ApplicationContext:
             return False
         app = QApplication.instance()
         self._gui = self._create_gui(self._services, app)
-        if not self._gui or not self._gui.pet_window:
+        if not self._gui or not self._gui.bot_window:
             logger.critical("主程序: GUI组件初始化失败,正在退出")
             return False
         self._connect_signals()
@@ -209,8 +209,8 @@ class ApplicationContext:
         except Exception as e:
             logger.warning(f"无法获取初始消息: {e}")
             initial_message = "start！"
-        self._gui.pet_window.update_speech_and_emotion(initial_message, "default")
-        self._gui.pet_window.show()
+        self._gui.bot_window.update_speech_and_emotion(initial_message, "default")
+        self._gui.bot_window.show()
         return True
 
     async def _create_services(self) -> Optional[AppServices]:
@@ -385,7 +385,7 @@ class ApplicationContext:
         if not os.path.exists(initial_pet_image_path):
             _create_placeholder_avatar(initial_pet_image_path, "Bot", size=(120, 120))
             
-        pet_window = self._PetWindow(
+        bot_window = self._PetWindow(
             initial_image_path=initial_pet_image_path,
             assets_base_path=services.assets_path,
             available_emotions=services.available_emotions,
@@ -403,7 +403,7 @@ class ApplicationContext:
                 
             web_chat_window = WebChatWindow(
                 url="http://localhost:8765",
-                parent=pet_window,
+                parent=bot_window,
                 avatar_path=services.bot_avatar_path
             )
             logger.info("Web聊天窗口预加载成功")
@@ -432,13 +432,13 @@ class ApplicationContext:
             logger.info(
                 "屏幕分析功能不可用(已在配置中禁用或缺少依赖)"
             )
-        pet_window.set_initial_feature_states(
+        bot_window.set_initial_feature_states(
             screen_analysis_available=screen_analysis_available,
             screen_analysis_enabled=services.config_manager.get_screen_analysis_enabled(),
             agent_core_available=services.agent_core is not None,
         )
         
-        gui = GuiComponents(pet_window=pet_window, screen_analyzer=screen_analyzer)
+        gui = GuiComponents(bot_window=bot_window, screen_analyzer=screen_analyzer)
         gui.web_chat_window = web_chat_window
         return gui
 
@@ -446,27 +446,27 @@ class ApplicationContext:
         """Manages all signal-slot connections between components."""
         if not self._gui or not self._services:
             return
-        if self._gui.pet_window:
-            self._gui.pet_window.request_open_chat_dialog.connect(
+        if self._gui.bot_window:
+            self._gui.bot_window.request_open_chat_dialog.connect(
                 self.open_chat_dialog_handler
             )
-            self._gui.pet_window.agent_mode_toggled_signal.connect(
+            self._gui.bot_window.agent_mode_toggled_signal.connect(
                 self.handle_agent_mode_toggled
             )
-        if self._gui.screen_analyzer and self._gui.pet_window:
+        if self._gui.screen_analyzer and self._gui.bot_window:
             self._gui.screen_analyzer.pet_reaction_ready.connect(
-                self._gui.pet_window.update_speech_and_emotion
+                self._gui.bot_window.update_speech_and_emotion
             )
             self._gui.screen_analyzer.pet_reaction_ready.connect(
                 self.handle_screen_analysis_reaction
             )
             self._gui.screen_analyzer.request_pet_hide.connect(
-                self._gui.pet_window.handle_hide_request
+                self._gui.bot_window.handle_hide_request
             )
             self._gui.screen_analyzer.request_pet_show.connect(
-                self._gui.pet_window.handle_show_request
+                self._gui.bot_window.handle_show_request
             )
-            self._gui.pet_window.screen_analysis_toggled_signal.connect(
+            self._gui.bot_window.screen_analysis_toggled_signal.connect(
                 self._gui.screen_analyzer.set_monitoring_state
             )
     def open_chat_dialog_handler(self):
@@ -504,7 +504,7 @@ class ApplicationContext:
                 
                 self._gui.web_chat_window = WebChatWindow(
                     url="http://localhost:8765",
-                    parent=self._gui.pet_window,
+                    parent=self._gui.bot_window,
                     avatar_path=self._services.bot_avatar_path
                 )
                 logger.info("WebChatWindow instance created")
@@ -518,20 +518,20 @@ class ApplicationContext:
             
             logger.info("Calculating window position...")
             # 定位窗口在Bot旁边
-            if self._gui.pet_window:
-                pet_geo = self._gui.pet_window.geometry()
-                screen_geometry = self._gui.pet_window.screen().availableGeometry()
+            if self._gui.bot_window:
+                bot_geo = self._gui.bot_window.geometry()
+                screen_geometry = self._gui.bot_window.screen().availableGeometry()
                 
                 window_width = self._gui.web_chat_window.width()
                 window_height = self._gui.web_chat_window.height()
                 
                 # 默认显示在Bot右侧
-                new_x = pet_geo.x() + pet_geo.width() + 20
-                new_y = pet_geo.y()
+                new_x = bot_geo.x() + bot_geo.width() + 20
+                new_y = bot_geo.y()
                 
                 # 如果右侧放不下，放左侧
                 if new_x + window_width > screen_geometry.right():
-                    new_x = pet_geo.x() - window_width - 20
+                    new_x = bot_geo.x() - window_width - 20
                 
                 # 确保不超出屏幕边界
                 if new_y + window_height > screen_geometry.bottom():
@@ -632,7 +632,7 @@ class ApplicationContext:
             f"（{bot_name}看了一眼{user_name}的屏幕{description_part}）{text}"
         )
         
-        self._gui.pet_window.update_speech_and_emotion(text, emotion)
+        self._gui.bot_window.update_speech_and_emotion(text, emotion)
         
         if self._gui.chat_dialog and not self._gui.chat_dialog.isHidden():
             if not self._gui.chat_dialog.is_agent_mode_active_chat:

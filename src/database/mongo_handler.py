@@ -245,7 +245,7 @@ class MongoHandler:
             )
             return []
 
-    def get_favorability_score(self, user_name: str, pet_name: str) -> Optional[int]:
+    def get_favorability_score(self, user_name: str, bot_name: str) -> Optional[int]:
         """
         获取指定用户和Bot之间的好感度分数。
         """
@@ -254,7 +254,7 @@ class MongoHandler:
             return None
         try:
             doc = self.relationship_status_collection.find_one(
-                {"user_name": user_name, "pet_name": pet_name}
+                {"user_name": user_name, "bot_name": bot_name}
             )
             if doc and "favorability_score" in doc:
                 return int(doc["favorability_score"])
@@ -267,12 +267,12 @@ class MongoHandler:
             return None
 
     async def update_favorability_score(
-        self, user_name: str, pet_name: str, new_score: int
+        self, user_name: str, bot_name: str, new_score: int
     ) -> bool:
         if not self.is_connected() or self.relationship_status_collection is None:
             logger.error("错误: 未连接到 MongoDB 或关系集合未初始化，无法更新好感度。")
             return False
-        query = {"user_name": user_name, "pet_name": pet_name}
+        query = {"user_name": user_name, "bot_name": bot_name}
         update = {
             "$set": {
                 "favorability_score": new_score,
