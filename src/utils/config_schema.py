@@ -37,12 +37,12 @@ class ConfigItem(BaseModel):
 CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
     ConfigCategory.BASIC: [
         {
-            "section": "PET",
+            "section": "BOT",
             "key": "NAME",
             "default": "小助手",
             "type": "string",
-            "label": "宠物名称",
-            "description": "您的桌面宠物的名字",
+            "label": "Bot名称",
+            "description": "您的桌面Bot的名字",
             "required": True
         },
         {
@@ -51,29 +51,29 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
             "default": "主人",
             "type": "string",
             "label": "用户名称",
-            "description": "您的名字,宠物会这样称呼您",
+            "description": "您的名字,Bot会这样称呼您",
             "required": True
         },
         {
-            "section": "PET",
+            "section": "BOT",
             "key": "PERSONA",
             "default": "你是一个友好、乐于助人的桌面Bot。",
             "type": "text",
-            "label": "宠物人格",
-            "description": "定义宠物的性格和行为方式",
+            "label": "Bot人格",
+            "description": "定义Bot的性格和行为方式",
             "required": True
         },
         {
-            "section": "PET",
+            "section": "BOT",
             "key": "INITIAL_IMAGE_FILENAME",
             "default": "default.png",
             "type": "string",
             "label": "初始图片文件名",
-            "description": "宠物窗口的初始显示图片",
+            "description": "Bot窗口的初始显示图片",
             "required": False
         },
         {
-            "section": "PET",
+            "section": "BOT",
             "key": "AGENT_MODE_EMOTIONS",
             "default": "'neutral', 'focused', 'helpful'",
             "type": "string",
@@ -137,7 +137,7 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
         {
             "section": "MONGODB",
             "key": "DATABASE_NAME",
-            "default": "desktop_pet_db",
+            "default": "desktop_bot_db",
             "type": "string",
             "label": "数据库名称",
             "description": "使用的数据库名称",
@@ -359,7 +359,7 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
         {
             "section": "SCREEN_ANALYSIS",
             "key": "PROMPT",
-            "default": "你是{pet_name}，一个可爱的桌面Bot。这张图片是用户当前的屏幕截图。\n请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n你的回复必须是一个JSON对象，包含 'text' (你作为Bot说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。",
+            "default": "你是{bot_name}，一个可爱的桌面Bot。这张图片是用户当前的屏幕截图。\n请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n你的回复必须是一个JSON对象，包含 'text' (你作为Bot说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。",
             "type": "text",
             "label": "分析提示词",
             "description": "屏幕分析时使用的提示词模板",
@@ -520,11 +520,11 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
         },
         {
             "section": "AVATARS",
-            "key": "PET_AVATAR_FILENAME",
+            "key": "BOT_AVATAR_FILENAME",
             "default": "bot.png",
             "type": "string",
-            "label": "宠物头像文件名",
-            "description": "宠物头像的文件名",
+            "label": "Bot头像文件名",
+            "description": "Bot头像的文件名",
             "required": False
         },
         {

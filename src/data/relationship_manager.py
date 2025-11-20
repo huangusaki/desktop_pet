@@ -83,20 +83,20 @@ class RelationshipManager:
     引入了动态调整机制，使得好感度变化更真实、非线性。
     """
 
-    def __init__(self, mongo_handler: MongoHandler, user_name: str, pet_name: str):
+    def __init__(self, mongo_handler: MongoHandler, user_name: str, bot_name: str):
         if not mongo_handler or not mongo_handler.is_connected():
             raise ValueError("MongoHandler is not connected or initialized.")
         self.mongo_handler = mongo_handler
         self.user_name = user_name
-        self.pet_name = pet_name
+        self.bot_name = bot_name
         self.current_score: Optional[int] = None
-        logger.info(f"RelationshipManager for {pet_name}-{user_name} initialized.")
+        logger.info(f"RelationshipManager for {bot_name}-{user_name} initialized.")
 
     def _get_current_score(self) -> int:
         """从数据库获取当前好感度分数，如果不存在则返回中性值0。优先使用缓存。"""
         if self.current_score is None:
             score = self.mongo_handler.get_favorability_score(
-                self.user_name, self.pet_name
+                self.user_name, self.bot_name
             )
             self.current_score = score if score is not None else 0
             logger.info(
@@ -151,13 +151,13 @@ class RelationshipManager:
         new_score = current_score + final_change
         new_score = max(MIN_SCORE, min(new_score, MAX_SCORE))
         logger.info(
-            f"Favorability update for {self.user_name}-{self.pet_name}: "
+            f"Favorability update for {self.user_name}-{self.bot_name}: "
             f"CurrentScore={current_score}, LLMBaseChange={base_change}, "
             f"ContextScaler={scaler:.2f}, ActualChange={actual_change:.2f}, "
             f"FinalChange={final_change}, NewScore={new_score}"
         )
         updated = await self.mongo_handler.update_favorability_score(
-            self.user_name, self.pet_name, new_score
+            self.user_name, self.bot_name, new_score
         )
         if updated:
             self.current_score = new_score

@@ -88,23 +88,23 @@ class ConfigManager:
         proxy = self.config.get("GEMINI", "HTTPS_PROXY", fallback="").strip()
         return proxy if proxy else None
 
-    def get_pet_initial_image_filename(self):
-        return self.config.get("PET", "INITIAL_IMAGE_FILENAME", fallback="default.png")
+    def get_bot_initial_image_filename(self):
+        return self.config.get("BOT", "INITIAL_IMAGE_FILENAME", fallback="default.png")
 
-    def get_pet_name(self):
-        return self.config.get("PET", "NAME", fallback="小助手")
+    def get_bot_name(self):
+        return self.config.get("BOT", "NAME", fallback="小助手")
 
     def get_user_name(self):
         return self.config.get("USER", "NAME", fallback="主人")
 
-    def get_pet_persona(self):
+    def get_bot_persona(self):
         return self.config.get(
-            "PET", "PERSONA", fallback="你是一个友好、乐于助人的桌面Bot。"
+            "BOT", "PERSONA", fallback="你是一个友好、乐于助人的桌面Bot。"
         )
 
-    def get_pet_agent_mode_emotions(self) -> str:
+    def get_bot_agent_mode_emotions(self) -> str:
         return self.config.get(
-            "PET", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
+            "BOT", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
         )
 
     def get_avatar_base_path_relative(self):
@@ -112,8 +112,8 @@ class ConfigManager:
             "AVATARS", "AVATAR_BASE_PATH", fallback="src/assets/icon"
         )
 
-    def get_pet_avatar_filename(self):
-        return self.config.get("AVATARS", "PET_AVATAR_FILENAME", fallback="bot.png")
+    def get_bot_avatar_filename(self):
+        return self.config.get("AVATARS", "BOT_AVATAR_FILENAME", fallback="bot.png")
 
     def get_user_avatar_filename(self):
         return self.config.get("AVATARS", "USER_AVATAR_FILENAME", fallback="user.png")
@@ -124,7 +124,7 @@ class ConfigManager:
         )
 
     def get_mongo_database_name(self):
-        return self.config.get("MONGODB", "DATABASE_NAME", fallback="desktop_pet_db")
+        return self.config.get("MONGODB", "DATABASE_NAME", fallback="desktop_bot_db")
 
     def get_mongo_collection_name(self):
         return self.config.get("MONGODB", "COLLECTION_NAME", fallback="chat_history")
@@ -221,7 +221,7 @@ class ConfigManager:
 
     def get_screen_analysis_prompt(self) -> str:
         default_prompt = (
-            "你是{pet_name}，一个可爱的桌面Bot。这张图片是用户当前的屏幕截图。\n"
+            "你是{bot_name}，一个可爱的桌面Bot。这张图片是用户当前的屏幕截图。\n"
             "请根据屏幕内容，用你的角色口吻，简短地、不经意地发表一句评论或感想。\n"
             "你的回复必须是一个JSON对象，包含 'text' (你作为Bot说的话，字符串) 和 'emotion' (你当前的情绪，从 {available_emotions_str} 中选择一个，字符串)。"
         )

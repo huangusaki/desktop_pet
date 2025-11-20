@@ -72,9 +72,9 @@ class GeminiClient:
         self,
         api_key: str,
         model_name: str,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
-        pet_persona: str,
+        bot_persona: str,
         available_emotions: List[str],
         prompt_builder: PromptBuilder,
         mongo_handler: Any,
@@ -93,10 +93,10 @@ class GeminiClient:
         self.current_key_index = 0
         self._clients: List[genai.Client] = []
         self.model_name = model_name
-        self.pet_name = pet_name
+        self.bot_name = bot_name
         self.prompt_builder = prompt_builder
         self.user_name = user_name
-        self.pet_persona = pet_persona
+        self.bot_persona = bot_persona
         self.mongo_handler = mongo_handler
         self.config_manager = config_manager
         self.unified_default_emotion = "default"
@@ -210,9 +210,9 @@ class GeminiClient:
     ) -> List[Any]:
         unified_prompt_str = await self.prompt_builder.build_unified_chat_prompt_string(
             new_user_message_text=new_user_message_text,
-            pet_name=self.pet_name,
+            bot_name=self.bot_name,
             user_name=self.user_name,
-            pet_persona=self.pet_persona,
+            bot_persona=self.bot_persona,
             available_emotions=self.available_emotions,
             unified_default_emotion=self.unified_default_emotion,
             mongo_handler=self.mongo_handler,
@@ -349,7 +349,7 @@ class GeminiClient:
             )
             screen_analysis_text_prompt_str = (
                 self.prompt_builder.build_screen_analysis_prompt(
-                    pet_name=self.pet_name,
+                    bot_name=self.bot_name,
                     user_name=self.user_name,
                     available_emotions=self.available_emotions,
                     mongo_handler=self.mongo_handler,
@@ -601,7 +601,7 @@ class GeminiClient:
                 final_emotion = validated_data.emotion
                 if not validated_data.steps:
                     agent_emotions_config = self.config_manager.config.get(
-                        "PET",
+                        "BOT",
                         "AGENT_MODE_EMOTIONS",
                         fallback="'neutral', 'focused', 'helpful'",
                     )

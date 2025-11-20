@@ -37,9 +37,9 @@ class AgentToggleRequest(BaseModel):
 
 
 class ConfigResponse(BaseModel):
-    pet_name: str
+    bot_name: str
     user_name: str
-    pet_avatar: str
+    bot_avatar: str
     user_avatar: str
     agent_mode_enabled: bool
     available_emotions: List[str]
@@ -128,9 +128,9 @@ class ChatWebServer:
         async def get_config():
             """Get application configuration."""
             return ConfigResponse(
-                pet_name=self.services.config_manager.get_pet_name(),
+                bot_name=self.services.config_manager.get_bot_name(),
                 user_name=self.services.config_manager.get_user_name(),
-                pet_avatar="/api/avatar/pet",
+                bot_avatar="/api/avatar/bot",
                 user_avatar="/api/avatar/user",
                 agent_mode_enabled=self.services.agent_core.is_agent_mode_active if self.services.agent_core else False,
                 available_emotions=self.services.available_emotions
@@ -142,12 +142,12 @@ class ChatWebServer:
             if not self.services.mongo_handler or not self.services.mongo_handler.is_connected():
                 return {"messages": []}
             
-            pet_name = self.services.config_manager.get_pet_name()
+            bot_name = self.services.config_manager.get_bot_name()
             user_name = self.services.config_manager.get_user_name()
             
             raw_history = self.services.mongo_handler.get_recent_chat_history(
                 count=limit,
-                role_play_character=pet_name
+                role_play_character=bot_name
             )
             
             messages = []
@@ -188,7 +188,7 @@ class ChatWebServer:
             # Save user message to database
             if self.services.mongo_handler and self.services.mongo_handler.is_connected():
                 user_name = self.services.config_manager.get_user_name()
-                pet_name = self.services.config_manager.get_pet_name()
+                bot_name = self.services.config_manager.get_bot_name()
                 
                 message_text = request.text
                 if request.files:
@@ -197,7 +197,7 @@ class ChatWebServer:
                 self.services.mongo_handler.insert_chat_message(
                     sender=user_name,
                     message_text=message_text,
-                    role_play_character=pet_name
+                    role_play_character=bot_name
                 )
             
             # Process message asynchronously
@@ -244,9 +244,9 @@ class ChatWebServer:
         
         @self.app.get("/api/avatar/{avatar_type}")
         async def get_avatar(avatar_type: str):
-            """Get pet or user avatar."""
-            if avatar_type == "pet":
-                avatar_path = self.services.pet_avatar_path
+            """Get bot or user avatar."""
+            if avatar_type == "bot":
+                avatar_path = self.services.bot_avatar_path
             elif avatar_type == "user":
                 avatar_path = self.services.user_avatar_path
             else:
@@ -430,13 +430,13 @@ class ChatWebServer:
             if (self.services.mongo_handler 
                 and self.services.mongo_handler.is_connected() 
                 and not response_data.get("is_error", False)):
-                pet_name = self.services.config_manager.get_pet_name()
-                pet_text = response_data.get("text", "")
+                bot_name = self.services.config_manager.get_bot_name()
+                bot_text = response_data.get("text", "")
                 
                 self.services.mongo_handler.insert_chat_message(
-                    sender=pet_name,
-                    message_text=pet_text,
-                    role_play_character=pet_name
+                    sender=bot_name,
+                    message_text=bot_text,
+                    role_play_character=bot_name
                 )
             
             # Stop typing indicator
@@ -451,7 +451,7 @@ class ChatWebServer:
                     "type": "message",
                     "data": {
                         "message_id": f"msg_{uuid.uuid4().hex[:8]}",
-                        "sender": self.services.config_manager.get_pet_name(),
+                        "sender": self.services.config_manager.get_bot_name(),
                         "text": response_data.get("text", ""),
                         "emotion": response_data.get("emotion", "default"),
                         "timestamp": datetime.utcnow().isoformat()

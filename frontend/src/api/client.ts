@@ -48,7 +48,7 @@ export const api = {
     },
 
     // 获取头像URL
-    getAvatarUrl(type: 'pet' | 'user'): string {
+    getAvatarUrl(type: 'bot' | 'user'): string {
         return `${API_BASE}/avatar/${type}`;
     },
 };

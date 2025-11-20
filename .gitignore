@@ -5,6 +5,7 @@ __pycache__/
 .avatar_cache/
 # C extensions
 *.so
+*.jpg
 config/settings.ini
 config/
 # 日志文件

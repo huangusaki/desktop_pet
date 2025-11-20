@@ -17,7 +17,7 @@ export const MessageList: React.FC = () => {
                 {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-white/40 text-center py-20">
                         <p className="text-lg mb-2 font-medium">还没有聊天记录</p>
-                        <p className="text-sm">开始和 {config?.bot_name || '宠物'} 聊天吧！</p>
+                        <p className="text-sm">开始和 {config?.bot_name || 'Bot'} 聊天吧！</p>
                     </div>
                 ) : (
                     <div className="space-y-6">
@@ -34,9 +34,9 @@ export const MessageList: React.FC = () => {
                 {isTyping && (
                     <div className="flex items-start gap-3 mb-4">
                         <img
-                            src={config ? config.pet_avatar : ''}
+                            src={config ? config.bot_avatar : ''}
                             className="w-10 h-10 rounded-full flex-shrink-0 border-2 border-white/20 shadow-md"
-                            alt="Pet Avatar"
+                            alt="Bot Avatar"
                         />
                         <div className="bg-white/10 backdrop-blur-md text-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-lg border border-white/5">
                             <div className="flex gap-1">

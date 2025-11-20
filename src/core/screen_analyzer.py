@@ -27,14 +27,14 @@ class ScreenAnalysisWorker(QObject):
         gemini_client: Any,
         prompt_builder: PromptBuilder,
         config_manager: Any,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
         available_emotions: List[str],
     ):
         super().__init__()
         self.gemini_client = gemini_client
         self.prompt_builder = prompt_builder
-        self.pet_name = pet_name
+        self.bot_name = bot_name
         self.config_manager = config_manager
         self.user_name = user_name
         self.available_emotions_list = available_emotions
@@ -182,7 +182,7 @@ class ScreenAnalyzer(QObject):
         gemini_client: Any,
         prompt_builder: PromptBuilder,
         config_manager: Any,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
         available_emotions: List[str],
         parent: Optional[QObject] = None,
@@ -191,7 +191,7 @@ class ScreenAnalyzer(QObject):
         self.gemini_client = gemini_client
         self.config_manager = config_manager
         self.prompt_builder = prompt_builder
-        self.pet_name = pet_name
+        self.bot_name = bot_name
         self.user_name = user_name
         self.available_emotions_list = available_emotions
         self._is_enabled = False
@@ -323,7 +323,7 @@ class ScreenAnalyzer(QObject):
             gemini_client=self.gemini_client,
             prompt_builder=self.prompt_builder,
             config_manager=self.config_manager,
-            pet_name=self.pet_name,
+            bot_name=self.bot_name,
             user_name=self.user_name,
             available_emotions=self.available_emotions_list,
         )

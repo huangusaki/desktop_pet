@@ -5,13 +5,13 @@ import { motion } from 'framer-motion';
 
 interface MessageProps {
     message: ChatMessageType;
-    petAvatar?: string;
+    botAvatar?: string;
     userAvatar?: string;
 }
 
-export const Message: React.FC<MessageProps> = ({ message, petAvatar, userAvatar }) => {
+export const Message: React.FC<MessageProps> = ({ message, botAvatar, userAvatar }) => {
     const isUser = message.is_user;
-    const avatar = isUser ? userAvatar : petAvatar;
+    const avatar = isUser ? userAvatar : botAvatar;
 
     return (
         <motion.div
@@ -27,9 +27,9 @@ export const Message: React.FC<MessageProps> = ({ message, petAvatar, userAvatar
                 className="flex-shrink-0 mt-0"
             >
                 <img
-                    src={avatar || (isUser ? api.getAvatarUrl('user') : api.getAvatarUrl('pet'))}
+                    src={avatar || (isUser ? api.getAvatarUrl('user') : api.getAvatarUrl('bot'))}
                     className="w-10 h-10 rounded-full object-cover border-2 border-white/10 shadow-lg"
-                    alt={isUser ? 'User Avatar' : 'Pet Avatar'}
+                    alt={isUser ? 'User Avatar' : 'Bot Avatar'}
                 />
             </motion.div>
 

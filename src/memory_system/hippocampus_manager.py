@@ -45,7 +45,7 @@ class HippocampusManager:
         memory_config: MemoryConfig,
         database_instance: Database,
         chat_collection_name: str,
-        pet_name: str,
+        bot_name: str,
         prompt_builder: PromptBuilder,
         global_llm_params: Optional[Dict[str, Any]] = None,
     ) -> Hippocampus:
@@ -62,7 +62,7 @@ class HippocampusManager:
                 memory_config=memory_config,
                 database_instance=database_instance,
                 chat_history_collection_name=chat_collection_name,
-                pet_name=pet_name,
+                bot_name=bot_name,
                 prompt_builder=prompt_builder,
                 global_llm_params=global_llm_params,
             )

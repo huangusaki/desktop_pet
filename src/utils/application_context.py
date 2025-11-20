@@ -93,7 +93,7 @@ class AppServices:
     available_emotions: List[str] = field(default_factory=lambda: ["default"])
     assets_path: Optional[str] = None
     avatar_base_path: Optional[str] = None
-    pet_avatar_path: Optional[str] = None
+    bot_avatar_path: Optional[str] = None
     user_avatar_path: Optional[str] = None
 
 
@@ -203,7 +203,12 @@ class ApplicationContext:
         self._web_server_started = True
         
         self._perform_startup_tasks(app)
-        initial_message = self._get_initial_pet_message()
+        initial_message_future = self.AsyncioHelper.schedule_task(self._get_initial_bot_message())
+        try:
+            initial_message = initial_message_future.result(timeout=5)
+        except Exception as e:
+            logger.warning(f"无法获取初始消息: {e}")
+            initial_message = "start！"
         self._gui.pet_window.update_speech_and_emotion(initial_message, "default")
         self._gui.pet_window.show()
         return True
@@ -247,14 +252,14 @@ class ApplicationContext:
             )
         )
         os.makedirs(avatar_base_path, exist_ok=True)
-        pet_avatar_path = os.path.join(
-            avatar_base_path, config_manager.get_pet_avatar_filename()
+        bot_avatar_path = os.path.join(
+            avatar_base_path, config_manager.get_bot_avatar_filename()
         )
         user_avatar_path = os.path.join(
             avatar_base_path, config_manager.get_user_avatar_filename()
         )
-        if not os.path.exists(pet_avatar_path):
-            _create_placeholder_avatar(pet_avatar_path, "P")
+        if not os.path.exists(bot_avatar_path):
+            _create_placeholder_avatar(bot_avatar_path, "B")
         if not os.path.exists(user_avatar_path):
             _create_placeholder_avatar(user_avatar_path, "U")
         
@@ -263,7 +268,7 @@ class ApplicationContext:
             available_emotions=available_emotions,
             assets_path=assets_path,
             avatar_base_path=avatar_base_path,
-            pet_avatar_path=pet_avatar_path,
+            bot_avatar_path=bot_avatar_path,
             user_avatar_path=user_avatar_path,
         )
         
@@ -287,7 +292,7 @@ class ApplicationContext:
             services.relationship_manager = self._RelationshipManagerClass(
                 mongo_handler=services.mongo_handler,
                 user_name=config_manager.get_user_name(),
-                pet_name=config_manager.get_pet_name(),
+                bot_name=config_manager.get_bot_name(),
             )
         else:
             logger.error(
@@ -309,9 +314,9 @@ class ApplicationContext:
             services.gemini_client = self._GeminiClientClass(
                 api_key=api_key,
                 model_name=config_manager.get_gemini_model_name(),
-                pet_name=config_manager.get_pet_name(),
+                bot_name=config_manager.get_bot_name(),
                 user_name=config_manager.get_user_name(),
-                pet_persona=config_manager.get_pet_persona(),
+                bot_persona=config_manager.get_bot_persona(),
                 prompt_builder=services.prompt_builder,
                 available_emotions=services.available_emotions,
                 mongo_handler=services.mongo_handler,
@@ -346,7 +351,7 @@ class ApplicationContext:
                         memory_config=mem_config,
                         database_instance=services.mongo_handler.get_database(),
                         chat_collection_name=config_manager.get_mongo_collection_name(),
-                        pet_name=config_manager.get_pet_name(),
+                        bot_name=config_manager.get_bot_name(),
                         global_llm_params=None,
                         prompt_builder=services.prompt_builder,
                     )
@@ -372,13 +377,13 @@ class ApplicationContext:
         Crucially, it does not create circular dependencies.
         """
         initial_image_filename = (
-            services.config_manager.get_pet_initial_image_filename()
+            services.config_manager.get_bot_initial_image_filename()
         )
         initial_pet_image_path = os.path.join(
             services.assets_path, initial_image_filename
         )
         if not os.path.exists(initial_pet_image_path):
-            _create_placeholder_avatar(initial_pet_image_path, "Pet", size=(120, 120))
+            _create_placeholder_avatar(initial_pet_image_path, "Bot", size=(120, 120))
             
         pet_window = self._PetWindow(
             initial_image_path=initial_pet_image_path,
@@ -399,7 +404,7 @@ class ApplicationContext:
             web_chat_window = WebChatWindow(
                 url="http://localhost:8765",
                 parent=pet_window,
-                avatar_path=services.pet_avatar_path
+                avatar_path=services.bot_avatar_path
             )
             logger.info("Web聊天窗口预加载成功")
         except Exception as e:
@@ -416,7 +421,7 @@ class ApplicationContext:
                 gemini_client=services.gemini_client,
                 prompt_builder=services.prompt_builder,
                 config_manager=services.config_manager,
-                pet_name=services.config_manager.get_pet_name(),
+                bot_name=services.config_manager.get_bot_name(),
                 user_name=services.config_manager.get_user_name(),
                 available_emotions=services.available_emotions,
                 parent=app,
@@ -500,7 +505,7 @@ class ApplicationContext:
                 self._gui.web_chat_window = WebChatWindow(
                     url="http://localhost:8765",
                     parent=self._gui.pet_window,
-                    avatar_path=self._services.pet_avatar_path
+                    avatar_path=self._services.bot_avatar_path
                 )
                 logger.info("WebChatWindow instance created")
             
@@ -512,7 +517,7 @@ class ApplicationContext:
             self._gui.web_chat_window.activateWindow()
             
             logger.info("Calculating window position...")
-            # 定位窗口在宠物旁边
+            # 定位窗口在Bot旁边
             if self._gui.pet_window:
                 pet_geo = self._gui.pet_window.geometry()
                 screen_geometry = self._gui.pet_window.screen().availableGeometry()
@@ -520,7 +525,7 @@ class ApplicationContext:
                 window_width = self._gui.web_chat_window.width()
                 window_height = self._gui.web_chat_window.height()
                 
-                # 默认显示在宠物右侧
+                # 默认显示在Bot右侧
                 new_x = pet_geo.x() + pet_geo.width() + 20
                 new_y = pet_geo.y()
                 
@@ -613,33 +618,36 @@ class ApplicationContext:
         if self._gui.chat_dialog:
             self._gui.chat_dialog.set_agent_mode_active(is_active)
 
-    def handle_screen_analysis_reaction(
+    async def handle_screen_analysis_reaction(
         self, text: str, emotion: str, image_description: str
     ):
-        pet_name = self._services.config_manager.get_pet_name()
+        bot_name = self._services.config_manager.get_bot_name()
         user_name = self._services.config_manager.get_user_name()
-        description_part = (
-            f"，发现里面的内容是：“{image_description.strip()}”"
-            if image_description and image_description.strip()
-            else ""
+        
+        description_part = ""
+        if image_description and image_description.strip():
+            description_part = f"，发现里面的内容是：“{image_description.strip()}”"
+        
+        full_text_for_bot = (
+            f"（{bot_name}看了一眼{user_name}的屏幕{description_part}）{text}"
         )
-        full_text_for_pet = (
-            f"（{pet_name}看了一眼{user_name}的屏幕{description_part}）{text}"
-        )
+        
         self._gui.pet_window.update_speech_and_emotion(text, emotion)
+        
         if self._gui.chat_dialog and not self._gui.chat_dialog.isHidden():
             if not self._gui.chat_dialog.is_agent_mode_active_chat:
                 self._gui.chat_dialog._add_message_to_display(
-                    pet_name, text, is_user=False
+                    bot_name, text, is_user=False
                 )
+        
         if self._services.mongo_handler and self._services.mongo_handler.is_connected():
             if self._services.config_manager.get_screen_analysis_save_to_chat_history():
-                self._services.mongo_handler.insert_chat_message(
-                    pet_name, full_text_for_pet, pet_name
+                await self._services.mongo_handler.insert_chat_message(
+                    bot_name, text, is_user=False
                 )
             else:
-                self._services.mongo_handler.insert_screen_analysis_log_entry(
-                    pet_name, f"[Screen Log] {full_text_for_pet}", pet_name
+                await self._services.mongo_handler.insert_screen_analysis_log_entry(
+                    bot_name, f"[Screen Log] {full_text_for_bot}", bot_name
                 )
         else:
             logger.warning("Main: MongoDB not connected, cannot save screen reaction.")
@@ -705,14 +713,14 @@ class ApplicationContext:
         )
         return timer
 
-    def _get_initial_pet_message(self) -> str:
+    async def _get_initial_bot_message(self) -> str:
         if self._services.mongo_handler and self._services.mongo_handler.is_connected():
-            pet_name = self._services.config_manager.get_pet_name()
+            bot_name = self._services.config_manager.get_bot_name()
             try:
                 history = self._services.mongo_handler.get_recent_chat_history(
-                    1, pet_name
+                    1, bot_name
                 )
-                if history and history[0].get("sender") == pet_name:
+                if history and history[0].get("sender") == bot_name:
                     return history[0].get("message_text", "start！")
             except Exception as e:
                 logger.warning(f"Could not retrieve initial message from history: {e}")

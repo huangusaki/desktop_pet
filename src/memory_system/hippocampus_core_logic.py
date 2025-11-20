@@ -112,7 +112,7 @@ class Hippocampus:
         self.config: Optional[MemoryConfig] = None
         self.db_instance: Optional[Database] = None
         self.chat_collection_name: Optional[str] = None
-        self.pet_name_for_history_filter: Optional[str] = None
+        self.bot_name_for_history_filter: Optional[str] = None
         self.prompt_builder: Optional[PromptBuilder] = None
         self.llm_topic_judge: Optional[LLM_request] = None
         self.llm_summary_by_topic: Optional[LLM_request] = None
@@ -131,14 +131,14 @@ class Hippocampus:
         memory_config: MemoryConfig,
         database_instance: Database,
         chat_history_collection_name: str,
-        pet_name: str,
+        bot_name: str,
         prompt_builder: PromptBuilder,
         global_llm_params: Optional[Dict[str, Any]] = None,
     ):
         self.config = memory_config
         self.db_instance = database_instance
         self.chat_collection_name = chat_history_collection_name
-        self.pet_name_for_history_filter = pet_name
+        self.bot_name_for_history_filter = bot_name
         self.prompt_builder = prompt_builder
         logger.info("海马体开始初始化...")
         if not LLM_request:

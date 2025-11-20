@@ -57,7 +57,7 @@ class ChatDialog(QDialog):
         config_manager: Any,
         pet_name: str,
         user_name: str,
-        pet_avatar_path: str,
+        bot_avatar_path: str,
         user_avatar_path: str,
         asyncio_helper: Any,
         hippocampus_manager: Optional[Any] = None,
@@ -79,14 +79,14 @@ class ChatDialog(QDialog):
         if self.agent_core and hasattr(self.agent_core, "is_agent_mode_active"):
             self.is_agent_mode_active_chat = self.agent_core.is_agent_mode_active
         self.current_role_play_character = self.pet_name
-        self.original_pet_avatar_path = pet_avatar_path
+        self.original_bot_avatar_path = bot_avatar_path
         self.original_user_avatar_path = user_avatar_path
         self.current_script_dir = os.path.dirname(os.path.abspath(__file__))
         self.avatar_cache_dir = os.path.join(self.current_script_dir, ".avatar_cache")
         if PILLOW_AVAILABLE:
             os.makedirs(self.avatar_cache_dir, exist_ok=True)
-        self.pet_avatar_qurl, self.is_pet_avatar_processed_by_pillow = (
-            self._initialize_avatar_qurl_and_flag(self.original_pet_avatar_path, "pet")
+        self.bot_avatar_qurl, self.is_bot_avatar_processed_by_pillow = (
+            self._initialize_avatar_qurl_and_flag(self.original_bot_avatar_path, "bot")
         )
         self.user_avatar_qurl, self.is_user_avatar_processed_by_pillow = (
             self._initialize_avatar_qurl_and_flag(
@@ -534,7 +534,7 @@ class ChatDialog(QDialog):
                 self.chat_text_for_tts_ready.emit(text_japanese, llm_tone)
             if not is_error_response:
                 if self.mongo_handler and self.mongo_handler.is_connected():
-                    actual_pet_name = self.config_manager.get_pet_name()
+                    actual_pet_name = self.config_manager.get_bot_name()
                     self.mongo_handler.insert_chat_message(
                         sender=actual_pet_name,
                         message_text=pet_text,
@@ -570,7 +570,7 @@ class ChatDialog(QDialog):
         current_display_size = DISPLAY_AVATAR_SIZE
         was_processed_by_pillow = (
             is_user and self.is_user_avatar_processed_by_pillow
-        ) or (not is_user and self.is_pet_avatar_processed_by_pillow)
+        ) or (not is_user and self.is_bot_avatar_processed_by_pillow)
         img_style = "display: block; object-fit: cover;"
         if not was_processed_by_pillow:
             img_style += " border-radius: 50%;"
@@ -606,7 +606,7 @@ class ChatDialog(QDialog):
     def _add_message_to_display(self, sender_name: str, message: str, is_user: bool):
         if self._is_closing:
             return
-        avatar_qurl = self.user_avatar_qurl if is_user else self.pet_avatar_qurl
+        avatar_qurl = self.user_avatar_qurl if is_user else self.bot_avatar_qurl
         actual_sender_name = self.user_name if is_user else self.pet_name
         html_content = self._format_message_html(
             actual_sender_name, message, avatar_qurl, is_user

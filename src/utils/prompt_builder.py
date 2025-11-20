@@ -15,13 +15,13 @@ class PromptBuilder:
         self.relationship_manager = relationship_manager
         self.available_tones = self.config_manager.get_tts_available_tones()
         self.default_tone = self.config_manager.get_tts_default_tone()
-        self.pet_name = self.config_manager.get_pet_name()
+        self.bot_name = self.config_manager.get_bot_name()
         self.user_name = self.config_manager.get_user_name()
 
     def _get_formatted_screen_analysis_log_content(
         self,
         mongo_handler: Any,
-        pet_name: str,
+        bot_name: str,
         read_from_main_chat_history: bool,
         count: int = 10,
     ) -> str:
@@ -36,14 +36,14 @@ class PromptBuilder:
         if read_from_main_chat_history:
             if hasattr(mongo_handler, "get_recent_chat_history"):
                 raw_logs = mongo_handler.get_recent_chat_history(
-                    count=count, role_play_character=pet_name
+                    count=count, role_play_character=bot_name
                 )
             else:
                 logger.warning("MongoHandler missing get_recent_chat_history method.")
         else:
             if hasattr(mongo_handler, "get_recent_screen_analysis_log"):
                 raw_logs = mongo_handler.get_recent_screen_analysis_log(
-                    count=count, role_play_character=pet_name
+                    count=count, role_play_character=bot_name
                 )
             else:
                 logger.warning(
@@ -54,7 +54,7 @@ class PromptBuilder:
                 text_content = log_entry.get("message_text", "")
                 if text_content:
                     if read_from_main_chat_history:
-                        if log_entry.get("sender") == pet_name:
+                        if log_entry.get("sender") == bot_name:
                             log_lines.append(f"- {text_content}")
                     else:
                         log_lines.append(f"- {text_content}")
@@ -66,7 +66,7 @@ class PromptBuilder:
     def _get_formatted_chat_history_content(
         self,
         mongo_handler: Any,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
     ) -> str:
         history_lines = []
@@ -81,7 +81,7 @@ class PromptBuilder:
                 raw_db_history = (
                     mongo_handler.get_recent_chat_history(
                         count=prompt_history_count,
-                        role_play_character=pet_name,
+                        role_play_character=bot_name,
                     )
                     or []
                 )
@@ -106,8 +106,8 @@ class PromptBuilder:
                     speaker_prefix = ""
                     if sender_val == user_name:
                         speaker_prefix = f"{user_name}: "
-                    elif sender_val == pet_name:
-                        speaker_prefix = f"{pet_name}: "
+                    elif sender_val == bot_name:
+                        speaker_prefix = f"{bot_name}: "
                     elif sender_val and isinstance(sender_val, str):
                         speaker_prefix = f"{sender_val}: "
                     if text_content and speaker_prefix:
@@ -122,9 +122,9 @@ class PromptBuilder:
     async def build_unified_chat_prompt_string(
         self,
         new_user_message_text: str,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
-        pet_persona: str,
+        bot_persona: str,
         available_emotions: List[str],
         unified_default_emotion: str,
         mongo_handler: Any,
@@ -147,7 +147,7 @@ class PromptBuilder:
                     f"Injecting relationship context: Level '{level_info['name']}' with score {level_info['score']}"
                 )
         persona_identity = (
-            f"你要扮演{pet_name}跟{user_name}进行对话，你的核心角色设定是：{pet_persona}"
+            f"你要扮演{bot_name}跟{user_name}进行对话，你的核心角色设定是：{bot_persona}"
             f"{relationship_prompt_injection}"
             f"\n下面是聊天记录：\n\n---------------------------------\n"
         )
@@ -159,7 +159,7 @@ class PromptBuilder:
 5、表达情绪多样化，基于对话内容，会害羞、生气、愤怒、友善、依赖等，具体要体现在回复内容以及返回表情，不要盲目乐观。
 6、不要拓展到无关话题上，三观要正，对不合适的事要指责。
 7、回答要口语化、日常化，不要书面化，应该更要有人和人对话的感觉。
-8、text_japanese中，请将{pet_name}转成片假名，不要使用原名
+8、text_japanese中，请将{bot_name}转成片假名，不要使用原名
 
 另外，这是你平时的说话风格，可以学习参考但不要使用：
 “哈……？你是笨蛋吗？”
@@ -169,7 +169,7 @@ class PromptBuilder:
 """
         system_instruction_part_A = persona_identity
         formatted_history_string = self._get_formatted_chat_history_content(
-            mongo_handler, pet_name, user_name
+            mongo_handler, bot_name, user_name
         )
         retrieved_memories_context_for_llm = ""
         memories_retrieved_count = 0
@@ -222,11 +222,11 @@ class PromptBuilder:
             f"text_japanese:日语字符串，一般是text项的翻译\n"
             "JSON output example:\n"
             "{\n"
-            f'  "text": "你好～我是{pet_name}哦!",\n'
+            f'  "text": "你好～我是{bot_name}哦!",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "tone": "{self.default_tone}",\n'
             f'  "favorability_change": 1,\n'
-            f'  "text_japanese": "こんにちは、{pet_name}です！"\n'
+            f'  "text_japanese": "こんにちは、{bot_name}です！"\n'
             "}\n"
             "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format."
         )
@@ -246,7 +246,7 @@ class PromptBuilder:
 
     def build_screen_analysis_prompt(
         self,
-        pet_name: str,
+        bot_name: str,
         user_name: str,
         available_emotions: List[str],
         mongo_handler: Any,
@@ -262,13 +262,13 @@ class PromptBuilder:
         )
         recent_screen_logs_str = self._get_formatted_screen_analysis_log_content(
             mongo_handler,
-            pet_name=pet_name,
+            bot_name=bot_name,
             read_from_main_chat_history=save_to_chat_history_config,
             count=30,
         )
         try:
             task_description = base_task_description_template.format(
-                pet_name=pet_name,
+                bot_name=bot_name,
                 user_name=user_name,
                 available_emotions_str=available_emotions_str,
             )
@@ -288,12 +288,12 @@ class PromptBuilder:
             f"text_japanese: japanese str, Original Japanese of the content in the 'text' field.\n"
             "\nJSON output example:\n"
             "{\n"
-            f'  "text": "Hello there, I am {pet_name}!",\n'
+            f'  "text": "Hello there, I am {bot_name}!",\n'
             f'  "image_description": "屏幕截图显示了一个YouTube视频播放界面，视频标题是关于猫咪的.etc",\n'
             f'  "emotion": "{available_emotions[0] if available_emotions else unified_default_emotion}",\n'
             f'  "tone": "{self.default_tone}",\n'
-            f'  "text_japanese": "こんにちは、{pet_name}です！",\n'
-            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复，另外text_japanese中，请将{pet_name}转成片假名，不要使用原名"
+            f'  "text_japanese": "こんにちは、{bot_name}です！",\n'
+            "EMPHASIS: Absolutely DO NOT output ANY characters outside the JSON object, and strictly adhere to this output format. If it does not comply, please regenerate.用中文回复，另外text_japanese中，请将{bot_name}转成片假名，不要使用原名"
         )
         final_prompt = f"{task_description}\n\n{json_output_instruction}"
         logger.info(f"{final_prompt}")
@@ -302,7 +302,7 @@ class PromptBuilder:
     def build_hierarchical_summary_prompt(
         self, text_to_summarize: str, time_info: str, topic: str
     ) -> str:
-        pet_name = self.pet_name
+        bot_name = self.bot_name
         prompt = (
             f"请根据以下聊天记录片段、相关的时间信息和指定的主题，为这个主题生成一个结构化的层级摘要。\n\n"
             f'聊天记录片段:\n"""\n{text_to_summarize}\n"""\n\n'
@@ -313,7 +313,7 @@ class PromptBuilder:
             f"{{\n"
             f'  "L0_keywords": "逗号分隔的3-5个与主题最相关的核心关键词/短语。",\n'
             f'  "L1_core_sentence": "客观总结一句25字左右高度精炼的核心摘要，准确点明主题在此聊天中的最主要内容或结论。",\n'
-            f'  "L2_paragraph": "以{pet_name}的视角总结一段100~200字的关于这个主题的摘要，自己过了很久之后回忆起来的视角，需围绕着主题，简述事件的发展过程，需标注时间信息。",\n'
+            f'  "L2_paragraph": "以{bot_name}的视角总结一段100~200字的关于这个主题的摘要，自己过了很久之后回忆起来的视角，需围绕着主题，简述事件的发展过程，需标注时间信息。",\n'
             f'  "L3_details_list": "一个包含关键信息点的字符串，这些点是与主题直接相关的、从原文中提取的完整句子（如果句子前有说话人标识，也应一并包含），用以提供支持核心摘要的具体细节，句子应保持原文的完整性，一句话一行。"\n'
             f"}}\n\n"
             f"重要提示：\n"
@@ -393,12 +393,12 @@ class PromptBuilder:
             else:
                 tools_string_list.append(f"- `{tool_name}` (参数未知或无)")
         tools_description = "\n".join(tools_string_list)
-        pet_name = self.config_manager.get_pet_name()
+        bot_name = self.config_manager.get_bot_name()
         user_name = self.config_manager.get_user_name()
         agent_emotions_str = self.config_manager.config.get(
-            "PET", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
+            "BOT", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
         )
-        prompt = f"""你现在是桌面助手 {pet_name} 的智能代理核心，负责理解用户 {user_name} 的指令并将其分解为一系列具体的操作步骤。
+        prompt = f"""你现在是桌面助手 {bot_name} 的智能代理核心，负责理解用户 {user_name} 的指令并将其分解为一系列具体的操作步骤。
 用户请求: "{user_request}"
 你可以使用以下工具来完成用户的请求。请为每个步骤选择一个工具：
 {tools_description}
