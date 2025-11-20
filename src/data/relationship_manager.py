@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from typing import Optional, Dict, Any, Tuple, List
 from ..database.mongo_handler import MongoHandler
 
@@ -79,7 +79,7 @@ MIN_BASE_CHANGE_PER_INTERACTION = -20
 
 class RelationshipManager:
     """
-    管理宠物和用户之间的关系（好感度）。
+    管理Bot和用户之间的关系（好感度）。
     引入了动态调整机制，使得好感度变化更真实、非线性。
     """
 

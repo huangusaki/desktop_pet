@@ -2,19 +2,22 @@ import sys
 import os
 import asyncio
 import threading
-import coloredlogs
 import logging
 from typing import Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PIL import Image
 from pathlib import Path
 
+# 配置基础日志(在setup_logging之前)
+logging.basicConfig(level=logging.INFO)
+_early_logger = logging.getLogger("main.early")
+
 # 尝试尽早导入 WebEngine 以避免后续卡死
 try:
     from PyQt6.QtWebEngineWidgets import QWebEngineView
-    print("WebEngine loaded successfully in main")
+    _early_logger.debug("WebEngine 加载成功")
 except ImportError:
-    print("WebEngine not found or failed to load in main")
+    _early_logger.warning("WebEngine 未找到或加载失败")
 
 script_file_path = Path(__file__).resolve()
 project_root = str(script_file_path.parent.parent)
@@ -24,6 +27,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src.utils.application_context import ApplicationContext
+from src.utils.logger_config import setup_logging
 
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.multimedia.ffmpeg=false"
 logger = logging.getLogger("main")
@@ -48,7 +52,7 @@ class AsyncioHelper:
     @staticmethod
     def _run_loop():
         if AsyncioHelper._loop is None:
-            logger.error("ERROR Main: _run_loop called with _loop as None")
+            logger.error("错误: _run_loop 调用时 _loop 为 None")
             return
         asyncio.set_event_loop(AsyncioHelper._loop)
         if AsyncioHelper._is_running_event:
@@ -57,7 +61,7 @@ class AsyncioHelper:
             AsyncioHelper._loop.run_forever()
         except Exception as e:
             logger.error(
-                f"ERROR Main: Asyncio loop in thread encountered an error: {e}"
+                f"错误: Asyncio 循环线程遇到错误: {e}"
             )
         finally:
             if hasattr(AsyncioHelper._loop, "shutdown_asyncgens"):
@@ -74,7 +78,7 @@ class AsyncioHelper:
             AsyncioHelper._thread.join(timeout=5)
             if AsyncioHelper._thread.is_alive():
                 logger.warning(
-                    "WARNING Main: Asyncio thread did not stop gracefully after 5 seconds."
+                    "警告: Asyncio 线程在5秒后未能正常停止"
                 )
         AsyncioHelper._loop = None
         AsyncioHelper._thread = None
@@ -87,34 +91,24 @@ class AsyncioHelper:
             return future
         else:
             logger.error(
-                "ERROR Main: Asyncio loop not running or not initialized. Cannot schedule task."
+                "错误: Asyncio 循环未运行或未初始化,无法调度任务"
             )
             return None
 
 
 if __name__ == "__main__":
-    coloredlogs.install(
-        level="INFO",
-        fmt="%(asctime)s [%(name)s:%(lineno)d] %(levelname)s: %(message)s",
-        level_styles={
-            "debug": {"color": "cyan"},
-            "info": {"color": "green"},
-            "warning": {"color": "yellow", "bold": True},
-            "error": {"color": "red"},
-            "critical": {"color": "red", "bold": True, "background": "white"},
-        },
-        field_styles={
-            "asctime": {"color": "green"},
-            "levelname": {"color": "green", "bold": True},
-            "name": {"color": "blue"},
-            "lineno": {"color": "blue"},
-        },
-    )
+    # 配置统一的日志系统
+    setup_logging(access_log_verbose=False)
+    
     if Image is None:
         QMessageBox.critical(
             None, "依赖缺失", "Pillow 库未找到。请安装 Pillow: pip install Pillow"
         )
         sys.exit(1)
+    # Minimal Chromium flags - only disable partial updates to reduce flickering during repaints
+    # Note: More aggressive flags like --disable-threaded-compositing break rendering entirely
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--use-gl=desktop --disable-partial-raster"
+    
     app = QApplication(sys.argv)
     context: Optional[ApplicationContext] = None
     exit_code = 0
@@ -125,14 +119,14 @@ if __name__ == "__main__":
         if success:
             exit_code = app.exec()
         else:
-            logger.critical("Application context failed to run. Exiting.")
+            logger.critical("应用上下文运行失败,正在退出")
             exit_code = 1
     except Exception as e:
-        logger.critical(f"An unhandled exception occurred in main: {e}", exc_info=True)
+        logger.critical(f"主程序发生未处理的异常: {e}", exc_info=True)
         QMessageBox.critical(None, "致命错误", f"发生未知错误，程序将退出: {e}")
         exit_code = 1
     finally:
-        logger.info("Application is shutting down...")
+        logger.info("应用程序正在关闭...")
         if context:
             context.shutdown()
         else:

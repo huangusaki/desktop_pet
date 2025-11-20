@@ -24,11 +24,11 @@ class AgentCore:
             "read_file_content": self.read_file_content,
             "get_active_window_title": self.get_active_window_title,
         }
-        logger.info("AgentCore initialized.")
+        logger.info("Agent核心已初始化")
 
     def set_agent_mode(self, active: bool):
         self.is_agent_mode_active = active
-        logger.info(f"Agent mode set to: {active}")
+        logger.info(f"Agent模式已设置为: {active}")
         if active:
             pyautogui.FAILSAFE = True
             pyautogui.PAUSE = self.config_manager.get_agent_pyautogui_pause()

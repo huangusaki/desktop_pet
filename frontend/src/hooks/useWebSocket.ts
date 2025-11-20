@@ -6,7 +6,17 @@ const WS_URL = 'ws://localhost:8765/ws';
 
 export const useWebSocket = () => {
     const socketRef = useRef<WebSocket | null>(null);
+    const pingIntervalRef = useRef<number | null>(null);
+    const reconnectTimeoutRef = useRef<number | null>(null);
     const { addMessage, setTyping, setConnected } = useChatStore();
+
+    // Store functions in ref to avoid triggering reconnections
+    const storeRef = useRef({ addMessage, setTyping, setConnected });
+
+    // Update storeRef when store functions change
+    useEffect(() => {
+        storeRef.current = { addMessage, setTyping, setConnected };
+    }, [addMessage, setTyping, setConnected]);
 
     const connect = useCallback(() => {
         try {
@@ -14,10 +24,10 @@ export const useWebSocket = () => {
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
-                setConnected(true);
+                storeRef.current.setConnected(true);
 
                 // Send ping every 30 seconds
-                const pingInterval = setInterval(() => {
+                pingIntervalRef.current = setInterval(() => {
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'ping',
@@ -25,10 +35,6 @@ export const useWebSocket = () => {
                         }));
                     }
                 }, 30000);
-
-                ws.onclose = () => {
-                    clearInterval(pingInterval);
-                };
             };
 
             ws.onmessage = (event) => {
@@ -38,12 +44,12 @@ export const useWebSocket = () => {
                     switch (message.type) {
                         case 'message':
                             if (message.data) {
-                                addMessage(message.data as ChatMessage);
+                                storeRef.current.addMessage(message.data as ChatMessage);
                             }
                             break;
 
                         case 'typing':
-                            setTyping(message.is_typing ?? false);
+                            storeRef.current.setTyping(message.is_typing ?? false);
                             break;
 
                         case 'error':
@@ -51,7 +57,6 @@ export const useWebSocket = () => {
                             break;
 
                         case 'agent_mode_changed':
-                            // Handle agent mode change
                             console.log('Agent mode changed:', message.enabled);
                             break;
 
@@ -66,15 +71,22 @@ export const useWebSocket = () => {
 
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                setConnected(false);
+                storeRef.current.setConnected(false);
             };
 
             ws.onclose = () => {
                 console.log('WebSocket disconnected');
-                setConnected(false);
+                storeRef.current.setConnected(false);
+
+                // Clear ping interval
+                if (pingIntervalRef.current) {
+                    clearInterval(pingIntervalRef.current);
+                    pingIntervalRef.current = null;
+                }
 
                 // Reconnect after 3 seconds
-                setTimeout(() => {
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    console.log('Attempting to reconnect...');
                     connect();
                 }, 3000);
             };
@@ -82,14 +94,21 @@ export const useWebSocket = () => {
             socketRef.current = ws;
         } catch (error) {
             console.error('Error creating WebSocket:', error);
-            setConnected(false);
+            storeRef.current.setConnected(false);
         }
-    }, [addMessage, setTyping, setConnected]);
+    }, []); // Empty dependency array - connect function is stable
 
     useEffect(() => {
         connect();
 
         return () => {
+            // Cleanup on unmount
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+            }
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+            }
             if (socketRef.current) {
                 socketRef.current.close();
             }

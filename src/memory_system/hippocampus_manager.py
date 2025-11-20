@@ -7,18 +7,6 @@ from .hippocampus_core_logic import Hippocampus
 from ..utils.prompt_builder import PromptBuilder
 
 logger = logging.getLogger("memory_system.manager")
-if not logger.hasHandlers():
-    parent_logger = logging.getLogger("memory_system")
-    if parent_logger.hasHandlers():
-        logger.handlers = parent_logger.handlers
-        logger.setLevel(parent_logger.level)
-        logger.propagate = False
-    else:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
-        logger.propagate = False
 
 
 class HippocampusManager:

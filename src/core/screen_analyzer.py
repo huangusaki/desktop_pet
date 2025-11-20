@@ -214,10 +214,10 @@ class ScreenAnalyzer(QObject):
         self.analysis_worker: Optional[ScreenAnalysisWorker] = None
         if not (ImageGrab and Image):
             self._is_enabled = False
-            logger.warning("Pillow not found, screen analysis feature disabled.")
+            logger.warning("未找到Pillow库,屏幕分析功能已禁用")
             if not self.tts_enabled_globally:
                 logger.warning(
-                    "Pillow not found and global TTS is disabled. ScreenAnalyzer will be largely inactive."
+                    "未找到Pillow库且全局TTS已禁用,屏幕分析器将基本不活动"
                 )
 
     def _load_config(self):
@@ -242,20 +242,20 @@ class ScreenAnalyzer(QObject):
         self._is_enabled = enabled
         if enabled:
             self.start_monitoring()
-            logger.info("Screen analysis monitoring enabled via external request.")
+            logger.info("屏幕分析监控已通过外部请求启用")
         else:
             self.stop_monitoring()
-            logger.info("Screen analysis monitoring disabled via external request.")
+            logger.info("屏幕分析监控已通过外部请求禁用")
 
     def start_monitoring(self):
         if not self._is_enabled:
             logger.info(
-                "Screen analysis monitoring not started (feature disabled in config). TTS can still be triggered by chat."
+                "屏幕分析监控未启动(功能已在配置中禁用),TTS仍可通过聊天触发"
             )
             return
         if not self.gemini_client:
             logger.warning(
-                "Cannot start screen analysis monitoring, Gemini client not available."
+                "无法启动屏幕分析监控,Gemini客户端不可用"
             )
             return
         initial_interval_ms = random.randint(
@@ -270,7 +270,7 @@ class ScreenAnalyzer(QObject):
                 self.analysis_worker.stop()
             self.analysis_thread.quit()
             if not self.analysis_thread.wait(3000):
-                logger.warning("Analysis thread did not quit gracefully, terminating.")
+                logger.warning("分析线程未正常退出,正在终止")
                 self.analysis_thread.terminate()
                 self.analysis_thread.wait()
         self._cleanup_analysis_thread_and_worker()
@@ -280,7 +280,7 @@ class ScreenAnalyzer(QObject):
             self.tts_request_thread.quit()
             if not self.tts_request_thread.wait(1000):
                 logger.warning(
-                    "TTS request thread did not quit gracefully, terminating."
+                    "TTS请求线程未正常退出,正在终止"
                 )
                 self.tts_request_thread.terminate()
                 self.tts_request_thread.wait()
@@ -288,7 +288,7 @@ class ScreenAnalyzer(QObject):
         self.tts_queue.clear()
         self.is_tts_processing = False
         logger.info(
-            "Screen monitoring stopped, threads cleaned up, and TTS queue cleared."
+            "屏幕监控已停止,线程已清理,TTS队列已清空"
         )
 
     def _check_and_analyze_wrapper(self):

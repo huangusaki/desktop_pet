@@ -1,4 +1,4 @@
-# Arisu 桌面宠物 - 开发指南
+﻿# Arisu 桌面Bot - 开发指南
 
 ## 快速开始
 
@@ -18,7 +18,7 @@ python -m src.main
 
 应用启动后：
 - Web服务器自动运行在 http://localhost:8765
-- 双击桌面宠物打开聊天窗口
+- 双击桌面Bot打开聊天窗口
 - 或直接在浏览器访问 http://localhost:8765
 
 ### 方式二：开发模式（前端热重载）
@@ -41,7 +41,7 @@ npm run dev
 
 ## 功能特性
 
-- ✅ 桌面宠物（PyQt6）
+- ✅ 桌面Bot（PyQt6）
 - ✅ Web聊天界面（React + Vite + TailwindCSS）
 - ✅ 实时消息（WebSocket）
 - ✅ 文件上传

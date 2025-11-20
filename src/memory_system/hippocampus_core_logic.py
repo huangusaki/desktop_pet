@@ -19,11 +19,6 @@ from ..utils.prompt_builder import PromptBuilder
 from ..llm.llm_request import LLM_request, GeminiSDKResponse
 
 logger = logging.getLogger("memory_system")
-if not logger.hasHandlers():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
 
 
 class Hippocampus:

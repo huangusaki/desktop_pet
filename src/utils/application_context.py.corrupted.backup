@@ -47,9 +47,9 @@ def _create_placeholder_avatar(
         y = (size[1] - text_height) / 2 - y_offset
         draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
         img.save(image_path)
-        logger.info(f"已创建占位头像图片: {image_path}")
+        logger.info(f"已创建占位头像图? {image_path}")
     except Exception as e:
-        logger.error(f"为 {image_path} 创建占位头像图片失败: {e}")
+        logger.error(f"?{image_path} 创建占位头像图片失败: {e}")
 
 
 def _scan_and_update_available_emotions(assets_path: str) -> List[str]:
@@ -64,12 +64,12 @@ def _scan_and_update_available_emotions(assets_path: str) -> List[str]:
             found_emotions.add(os.path.splitext(filename)[0].lower())
     if not found_emotions:
         logger.warning(
-            f"警告: 资源路径 {assets_path} 中未找到任何PNG图片。添加 'default'。"
+            f"警告: 资源路径 {assets_path} 中未找到任何PNG图片。添?'default'?
         )
         found_emotions.add("default")
     if "default" not in found_emotions:
         logger.warning(
-            f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加。已自动添加'default'。"
+            f"警告: 'default.png' 未在 {assets_path} 中找到。建议添加。已自动添加'default'?
         )
         found_emotions.add("default")
     emotions_list = sorted(list(found_emotions))
@@ -157,9 +157,9 @@ class ApplicationContext:
             self._AgentCoreClass = AgentCore_Import
         except ImportError:
             self._AgentCoreClass = None
-            logger.warning("应用上下文: AgentCore 无法导入")
+            logger.warning("ApplicationContext: AgentCore 无法导入")
             
-        logger.info("应用上下文初始化完成")
+        logger.info("ApplicationContext 初始化完?)
 
     def run(self) -> bool:
         init_future = self.AsyncioHelper.schedule_task(self._create_services())
@@ -193,12 +193,11 @@ class ApplicationContext:
         app = QApplication.instance()
         self._gui = self._create_gui(self._services, app)
         if not self._gui or not self._gui.pet_window:
-            logger.critical("主程序: GUI组件初始化失败,正在退出")
+            logger.critical("Main: GUI components initialization failed. Exiting.")
             return False
         self._connect_signals()
         
         # 启动Web服务器（在显示窗口之前）
-        logger.info("正在启动Web服务器...")
         self._start_web_server()
         self._web_server_started = True
         
@@ -218,29 +217,26 @@ class ApplicationContext:
         config_path = os.path.join(self.project_root, "config", "settings.ini")
         if not os.path.exists(config_path):
             logger.warning(
-                f"配置文件 {config_path} 不存在,将创建模板"
+                f"Config file {config_path} does not exist. A template will be created."
             )
             try:
                 with open(config_path, "w", encoding="utf-8") as cf:
                     cf.write("; Please fill in your API keys and settings.\n")
-                logger.info(f"配置模板已创建于 {config_path}")
+                logger.info(f"配置模板已创? {config_path}")
                 return None
             except IOError as e:
-                logger.error(f"无法创建配置文件: {e}")
+                logger.error(f"Could not create config file: {e}")
                 return None
         try:
-            logger.info("正在初始化配置管理器...")
             config_manager = self._ConfigManagerClass(config_file=config_path)
-            logger.info("配置管理器已初始化")
         except Exception as e:
-            logger.error(f"ConfigManager initialization failed: {e}", exc_info=True)
+            logger.error(f"ConfigManager 初始化失? {e}", exc_info=True)
             return None
         if http_proxy := config_manager.get_http_proxy():
             os.environ["HTTP_PROXY"] = http_proxy
         if https_proxy := config_manager.get_https_proxy():
             os.environ["HTTPS_PROXY"] = https_proxy
         
-        logger.info("正在设置头像路径...")
         avatar_base_path = os.path.normpath(
             os.path.join(
                 self.project_root, config_manager.get_avatar_base_path_relative()
@@ -267,7 +263,6 @@ class ApplicationContext:
             user_avatar_path=user_avatar_path,
         )
         
-        logger.info("正在初始化MongoDB处理器...")
         try:
             mongo_handler = self._MongoHandlerClass(
                 config_manager.get_mongo_connection_string(),
@@ -276,35 +271,30 @@ class ApplicationContext:
             )
             if mongo_handler.is_connected():
                 services.mongo_handler = mongo_handler
-                logger.info("MongoDB处理器已连接")
+                logger.info("MongoDB 已连?)
             else:
-                logger.warning("MongoDB处理器连接失败")
+                logger.warning("MongoDB 连接失败")
         except Exception as e:
-            logger.critical(f"MongoDB初始化异常: {e}", exc_info=True)
+            logger.critical(f"MongoDB 初始化异? {e}", exc_info=True)
         
         if services.mongo_handler:
-            logger.info("正在初始化关系管理器...")
             services.relationship_manager = self._RelationshipManagerClass(
                 mongo_handler=services.mongo_handler,
                 user_name=config_manager.get_user_name(),
                 pet_name=config_manager.get_pet_name(),
             )
         else:
-            logger.error(
-                "无法初始化关系管理器,因为MongoDB未连接"
-            )
+            logger.error("无法初始?RelationshipManager: MongoDB 未连?)
         
-        logger.info("正在初始化提示构建器...")
         services.prompt_builder = self._PromptBuilderClass(
             config_manager=config_manager,
             relationship_manager=services.relationship_manager,
         )
         
-        logger.info("正在初始化Gemini客户端...")
         try:
             api_key = config_manager.get_gemini_api_key()
             if not api_key or api_key == "YOUR_API_KEY_HERE":
-                logger.critical("API密钥错误: 请在 config/settings.ini 中配置主聊天Gemini API密钥")
+                logger.critical("配置错误: 请在 config/settings.ini 中配?Gemini API Key")
                 return None
             services.gemini_client = self._GeminiClientClass(
                 api_key=api_key,
@@ -317,27 +307,25 @@ class ApplicationContext:
                 mongo_handler=services.mongo_handler,
                 config_manager=config_manager,
             )
-            logger.info("Gemini客户端已初始化")
+            logger.info("Gemini 客户端已初始?)
         except Exception as e:
             logger.critical(
-                f"Gemini客户端初始化异常: {e}", exc_info=True
+                f"Gemini 客户端初始化异常: {e}", exc_info=True
             )
             return None
             
         if self._AgentCoreClass and services.gemini_client:
-            logger.info("正在初始化Agent核心...")
             try:
                 services.agent_core = self._AgentCoreClass(
                     config_manager=config_manager,
                     prompt_builder=services.prompt_builder,
                     gemini_client=services.gemini_client,
                 )
-                logger.info("Agent核心已初始化")
+                logger.info("AgentCore 已初始化")
             except Exception as e:
-                logger.error(f"初始化Agent核心失败: {e}", exc_info=True)
+                logger.error(f"初始?AgentCore 失败: {e}", exc_info=True)
                 
         if self._HippocampusManagerClass and services.mongo_handler:
-            logger.info("正在初始化记忆系统管理器...")
             try:
                 mem_config = self._MemoryConfigClass.from_config_manager(config_manager)
                 hippocampus_manager = await self._HippocampusManagerClass.get_instance()
@@ -351,9 +339,7 @@ class ApplicationContext:
                         prompt_builder=services.prompt_builder,
                     )
                     services.hippocampus_manager = hippocampus_manager
-                    logger.info(
-                        "记忆系统(HippocampusManager)初始化成功"
-                    )
+                    logger.info("记忆系统已初始化")
             except Exception as e:
                 QMessageBox.warning(
                     None,
@@ -361,7 +347,7 @@ class ApplicationContext:
                     f"An error occurred while initializing the memory system: {e}",
                 )
                 logger.error(
-                    f"记忆系统(Hippocampus)初始化失败: {e}",
+                    f"记忆系统初始化失? {e}",
                     exc_info=True,
                 )
         return services
@@ -388,8 +374,8 @@ class ApplicationContext:
             agent_core=services.agent_core,
         )
         
-        # Preload WebChatWindow for instant opening
-        logger.info("正在预加载Web聊天窗口...")
+        # Preload WebChatWindow 以实现即开
+        logger.info("正在预加?WebChatWindow...")
         try:
             if hasattr(self, '_WebChatWindowClass') and self._WebChatWindowClass:
                 WebChatWindow = self._WebChatWindowClass
@@ -401,9 +387,9 @@ class ApplicationContext:
                 parent=pet_window,
                 avatar_path=services.pet_avatar_path
             )
-            logger.info("Web聊天窗口预加载成功")
+            logger.info("WebChatWindow 预加载完?)
         except Exception as e:
-            logger.error(f"预加载Web聊天窗口失败: {e}")
+            logger.error(f"WebChatWindow 预加载失? {e}")
             web_chat_window = None
 
         screen_analyzer = None
@@ -422,11 +408,8 @@ class ApplicationContext:
                 parent=app,
             )
             screen_analysis_available = True
-            logger.info("屏幕分析功能可用")
         else:
-            logger.info(
-                "屏幕分析功能不可用(已在配置中禁用或缺少依赖)"
-            )
+            logger.info("屏幕分析功能未启用或缺少依赖")
         pet_window.set_initial_feature_states(
             screen_analysis_available=screen_analysis_available,
             screen_analysis_enabled=services.config_manager.get_screen_analysis_enabled(),
@@ -470,31 +453,27 @@ class ApplicationContext:
             if not self._gui or not self._services:
                 return
             
-            logger.info("正在打开Web聊天窗口...")
-            
-            # Web服务器已经在启动时运行了，直接显示窗口
+            # Web服务器已经在启动时运行了，直接显示窗?
             self._show_web_chat_window()
             
         except Exception as e:
-            logger.error(f"打开Web聊天窗口错误: {e}", exc_info=True)
+            logger.error(f"打开 Web 聊天窗口错误: {e}", exc_info=True)
             QMessageBox.warning(
                 None,
                 "无法打开聊天窗口",
-                f"打开聊天窗口时出错: {e}"
+                f"打开聊天窗口时出? {e}"
             )
     
     def _show_web_chat_window(self):
-        """显示Web聊天窗口"""
+        """显示 Web 聊天窗口"""
         try:
-            logger.info("Entering _show_web_chat_window")
-            # 创建或显示WebEngine窗口
+            # 创建或显?WebEngine 窗口
             if not hasattr(self._gui, 'web_chat_window') or self._gui.web_chat_window is None:
-                logger.info("Creating WebChatWindow instance...")
                 
                 if hasattr(self, '_WebChatWindowClass') and self._WebChatWindowClass:
                     WebChatWindow = self._WebChatWindowClass
                 else:
-                    logger.warning("WebChatWindowClass not preloaded, importing now...")
+                    logger.warning("WebChatWindowClass 未预加载，现在导?..")
                     from src.gui.web_chat_window import WebChatWindow
                 
                 self._gui.web_chat_window = WebChatWindow(
@@ -502,17 +481,15 @@ class ApplicationContext:
                     parent=self._gui.pet_window,
                     avatar_path=self._services.pet_avatar_path
                 )
-                logger.info("WebChatWindow instance created")
             
-            # 确保窗口没有被最小化或隐藏
+            # 确保窗口没有被最小化或隐?
             if self._gui.web_chat_window.isHidden():
                 self._gui.web_chat_window.show()
             
             self._gui.web_chat_window.raise_()
             self._gui.web_chat_window.activateWindow()
             
-            logger.info("Calculating window position...")
-            # 定位窗口在宠物旁边
+            # 定位窗口在宠物旁?
             if self._gui.pet_window:
                 pet_geo = self._gui.pet_window.geometry()
                 screen_geometry = self._gui.pet_window.screen().availableGeometry()
@@ -520,15 +497,15 @@ class ApplicationContext:
                 window_width = self._gui.web_chat_window.width()
                 window_height = self._gui.web_chat_window.height()
                 
-                # 默认显示在宠物右侧
+                # 默认显示在宠物右?
                 new_x = pet_geo.x() + pet_geo.width() + 20
                 new_y = pet_geo.y()
                 
-                # 如果右侧放不下，放左侧
+                # 如果右侧放不下，放左?
                 if new_x + window_width > screen_geometry.right():
                     new_x = pet_geo.x() - window_width - 20
                 
-                # 确保不超出屏幕边界
+                # 确保不超出屏幕边?
                 if new_y + window_height > screen_geometry.bottom():
                     new_y = screen_geometry.bottom() - window_height
                 if new_y < screen_geometry.top():
@@ -536,19 +513,18 @@ class ApplicationContext:
                 
                 self._gui.web_chat_window.move(new_x, new_y)
             
-            logger.info("Web chat window opened successfully")
         except Exception as e:
-            logger.error(f"Error showing web chat window: {e}", exc_info=True)
+            logger.error(f"显示 Web 聊天窗口错误: {e}", exc_info=True)
 
     def _start_web_server(self):
-        """在后台线程启动FastAPI Web服务器"""
+        """在后台线程启动FastAPI Web服务?""
         try:
             from src.web import create_app
             from src.utils.logger_config import get_uvicorn_log_config
             import uvicorn
             import threading
             
-            logger.info("正在启动聊天界面Web服务器...")
+            logger.info("正在启动 Web 服务?..")
             
             # 创建FastAPI应用
             app = create_app(self._services)
@@ -560,24 +536,24 @@ class ApplicationContext:
                         app,
                         host="0.0.0.0",  # 允许手机访问
                         port=8765,
-                        log_level="info",
-                        log_config=get_uvicorn_log_config()  # 使用我们的日志配置
+                        log_config=get_uvicorn_log_config(),  # 使用统一日志配置
+                        access_log=True  # 启用访问日志（通过过滤器控制详细程度）
                     )
                 except Exception as e:
-                    logger.error(f"Web服务器错误: {e}", exc_info=True)
+                    logger.error(f"Web 服务器错? {e}", exc_info=True)
             
             self._web_server_thread = threading.Thread(target=run_server, daemon=True)
             self._web_server_thread.start()
             
-            logger.info("Web服务器已启动于 http://localhost:8765")
-            logger.info("也可从移动设备访问: http://<你的IP>:8765")
+            logger.info("Web 服务器已在后台启? http://localhost:8765")
+            logger.info("手机访问地址: http://<your-ip>:8765")
             
         except Exception as e:
-            logger.error(f"Failed to start web server: {e}", exc_info=True)
+            logger.error(f"启动 Web 服务器失? {e}", exc_info=True)
             QMessageBox.critical(
                 None,
-                "Web服务器启动失败",
-                f"无法启动Web聊天服务器: {e}\n\n请检查端口8765是否被占用。"
+                "Web服务器启动失?,
+                f"无法启动Web聊天服务? {e}\n\n请检查端?765是否被占用?
             )
 
     def _perform_startup_tasks(self, app: QApplication):
@@ -619,7 +595,7 @@ class ApplicationContext:
         pet_name = self._services.config_manager.get_pet_name()
         user_name = self._services.config_manager.get_user_name()
         description_part = (
-            f"，发现里面的内容是：“{image_description.strip()}”"
+            f"，发现里面的内容是：“{image_description.strip()}?
             if image_description and image_description.strip()
             else ""
         )
@@ -701,7 +677,7 @@ class ApplicationContext:
         timer.timeout.connect(trigger)
         timer.start(interval_ms)
         logger.info(
-            f"记忆{task_name}任务已计划每 {interval_ms // 60000} 分钟运行一次"
+            f"记忆 {task_name} 任务已调度，?{interval_ms // 60000} 分钟运行一?
         )
         return timer
 
@@ -713,10 +689,10 @@ class ApplicationContext:
                     1, pet_name
                 )
                 if history and history[0].get("sender") == pet_name:
-                    return history[0].get("message_text", "start！")
+                    return history[0].get("message_text", "start?)
             except Exception as e:
                 logger.warning(f"Could not retrieve initial message from history: {e}")
-        return "start！"
+        return "start?
 
     def shutdown(self):
         logger.info("Shutting down ApplicationContext resources...")
@@ -739,3 +715,4 @@ class ApplicationContext:
             self._services.mongo_handler.close_connection()
         self.AsyncioHelper.stop_asyncio_loop()
         logger.info("ApplicationContext shutdown complete.")
+

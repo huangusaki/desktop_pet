@@ -1,4 +1,4 @@
-export interface ChatMessage {
+﻿export interface ChatMessage {
     id: string;
     sender: string;
     text: string;
@@ -8,9 +8,9 @@ export interface ChatMessage {
 }
 
 export interface Config {
-    pet_name: string;
+    bot_name: string;
     user_name: string;
-    pet_avatar: string;
+    bot_avatar: string;
     user_avatar: string;
     agent_mode_enabled: boolean;
     available_emotions: string[];

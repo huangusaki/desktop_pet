@@ -86,7 +86,7 @@ class ChatWebServer:
         self._setup_cors()
         self._setup_routes()
         
-        logger.info("ChatWebServer initialized")
+        logger.info("ChatWebServer 已初始化")
     
     def _setup_cors(self):
         """Configure CORS to allow access from browsers (including mobile)."""
@@ -97,7 +97,7 @@ class ChatWebServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        logger.info("CORS middleware configured")
+        logger.info("CORS 中间件已配置")
     
     def _setup_routes(self):
         """Set up all API routes and WebSocket endpoints."""

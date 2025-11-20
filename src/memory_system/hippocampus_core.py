@@ -1,10 +1,7 @@
 import logging
 
-if not logging.getLogger("memory_system").hasHandlers():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+logger = logging.getLogger("memory_system")
+
 from .hippocampus_utils import calculate_information_content, cosine_similarity
 from .hippocampus_graph import MemoryGraph
 from .hippocampus_io import EntorhinalCortex

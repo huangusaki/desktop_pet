@@ -1,4 +1,4 @@
-from pymongo import MongoClient, DESCENDING
+﻿from pymongo import MongoClient, DESCENDING
 from pymongo.database import Database
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure
@@ -247,7 +247,7 @@ class MongoHandler:
 
     def get_favorability_score(self, user_name: str, pet_name: str) -> Optional[int]:
         """
-        获取指定用户和宠物之间的好感度分数。
+        获取指定用户和Bot之间的好感度分数。
         """
         if not self.is_connected() or self.relationship_status_collection is None:
             logger.error("错误: 未连接到 MongoDB 或关系集合未初始化，无法获取好感度。")

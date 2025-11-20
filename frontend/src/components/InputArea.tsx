@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+﻿import React, { useState, useRef } from 'react';
 import { api } from '../api/client';
 import { useChatStore } from '../stores/chatStore';
 import { SendIcon, AttachmentIcon } from './Icons';
@@ -131,7 +131,7 @@ export const InputArea: React.FC = () => {
                         py-2
                         text-sm
                     "
-                    placeholder={`对${config?.pet_name || '爱丽丝'}说点什么...`}
+                    placeholder={`对${config?.bot_name || '爱丽丝'}说点什么...`}
                     disabled={isSending}
                 />
 

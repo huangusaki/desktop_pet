@@ -11,18 +11,6 @@ from typing import Optional, List, Tuple, Dict, TYPE_CHECKING
 from itertools import combinations
 
 logger = logging.getLogger("memory_system.processing")
-if not logger.hasHandlers():
-    parent_logger = logging.getLogger("memory_system")
-    if parent_logger.hasHandlers():
-        logger.handlers = parent_logger.handlers
-        logger.setLevel(parent_logger.level)
-        logger.propagate = False
-    else:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
-        logger.propagate = False
 if TYPE_CHECKING:
     from .hippocampus_core_logic import Hippocampus
 

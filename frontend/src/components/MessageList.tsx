@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+﻿import React, { useEffect, useRef } from 'react';
 import { Message } from './Message';
 import { useChatStore } from '../stores/chatStore';
 
@@ -17,10 +17,10 @@ export const MessageList: React.FC = () => {
                 {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-white/40 text-center py-20">
                         <p className="text-lg mb-2 font-medium">还没有聊天记录</p>
-                        <p className="text-sm">开始和 {config?.pet_name || '宠物'} 聊天吧！</p>
+                        <p className="text-sm">开始和 {config?.bot_name || '宠物'} 聊天吧！</p>
                     </div>
                 ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-6">
                         {messages.map((message) => (
                             <Message
                                 key={message.id}

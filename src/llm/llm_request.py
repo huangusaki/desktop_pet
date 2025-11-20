@@ -19,11 +19,6 @@ PermissionDeniedException = None
 InternalServerErrorException = None
 ServiceUnavailableException = None
 logger = logging.getLogger("llm_request")
-if not logger.hasHandlers():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
 
 
 def compress_base64_image_by_scale(
