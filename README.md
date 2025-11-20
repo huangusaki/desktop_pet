@@ -58,8 +58,8 @@
 
 ```bash
 # 克隆项目 (如果你还没有)
-# git clone https://github.com/your-username/Arisu_gf.git
-# cd Arisu_gf
+# git clone https://github.com/huangusaki/Arisu_bot.git
+# cd Arisu_bot
 
 # 1. 安装 Python 后端依赖
 pip install -r requirements.txt
@@ -115,7 +115,7 @@ npm run dev
 ## 目录结构
 
 ```
-Arisu_gf/
+Arisu_bot/
 ├── src/                # Python 后端源码
 │   ├── database/       # MongoDB 数据库操作
 │   ├── memory_system/  # 记忆系统核心逻辑
