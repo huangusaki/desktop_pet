@@ -294,3 +294,71 @@ class MongoHandler:
                 exc_info=True,
             )
             return False
+
+    def get_emotion_update(
+        self, user_name: str, bot_name: str
+    ) -> Optional[Dict[str, str]]:
+        """
+        获取指定用户和Bot之间的最新emotion_update。
+        
+        Returns:
+            包含state和reason的字典,如果不存在则返回None
+        """
+        if not self.is_connected() or self.relationship_status_collection is None:
+            logger.error("错误: 未连接到 MongoDB 或关系集合未初始化,无法获取emotion_update。")
+            return None
+        try:
+            doc = self.relationship_status_collection.find_one(
+                {"user_name": user_name, "bot_name": bot_name}
+            )
+            if doc and "emotion_update" in doc:
+                return doc["emotion_update"]
+            return None
+        except Exception as e:
+            logger.error(
+                f"从 MongoDB ('{self.relationship_status_collection_name}') 获取emotion_update时出错: {e}",
+                exc_info=True,
+            )
+            return None
+
+    async def update_emotion_update(
+        self, user_name: str, bot_name: str, emotion_data: Dict[str, str]
+    ) -> bool:
+        """
+        更新指定用户和Bot之间的emotion_update。
+        
+        Args:
+            user_name: 用户名
+            bot_name: Bot名称
+            emotion_data: 包含state和reason的字典
+            
+        Returns:
+            更新是否成功
+        """
+        if not self.is_connected() or self.relationship_status_collection is None:
+            logger.error("错误: 未连接到 MongoDB 或关系集合未初始化,无法更新emotion_update。")
+            return False
+        query = {"user_name": user_name, "bot_name": bot_name}
+        update = {
+            "$set": {
+                "emotion_update": emotion_data,
+                "emotion_last_updated": datetime.datetime.now(datetime.timezone.utc),
+            }
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self.relationship_status_collection.update_one(
+                    query, update, upsert=True
+                ),
+            )
+            logger.info(f"成功更新emotion_update: {emotion_data}")
+            return True
+        except Exception as e:
+            logger.error(
+                f"向 MongoDB ('{self.relationship_status_collection_name}') 更新emotion_update时出错: {e}",
+                exc_info=True,
+            )
+            return False
+

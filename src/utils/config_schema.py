@@ -24,13 +24,14 @@ class ConfigItem(BaseModel):
     section: str  # INI section name
     key: str  # INI key name
     value: Any  # Current value
-    value_type: str  # 'string', 'int', 'float', 'bool'
+    value_type: str  # 'string', 'int', 'float', 'bool', 'enum'
     default_value: Any  # Default value
     label: str  # Display label
     description: str  # Description for users
     category: ConfigCategory  # Category this item belongs to
     required: bool = False  # Whether this field is required
     sensitive: bool = False  # Whether this is sensitive data (like API keys)
+    options: Optional[List[str]] = None  # Available options for enum types
 
 
 # Config schema definitions by category
@@ -80,10 +81,65 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
             "label": "Agent模式情绪",
             "description": "智能体模式下可用的情绪表情",
             "required": False
+        },
+        {
+            "section": "BOT",
+            "key": "SPEECH_PATTERN",
+            "default": '"哈……?你是笨蛋吗?"\n"爱丽丝死了哦,现在是作为地缚灵在说话"\n"爱丽丝的心很大,可以装下很多喜欢的东西"\n"因为是前辈的请求,爱丽丝才会答应的,前辈可不要忘了这点哦?"',
+            "type": "text",
+            "label": "说话风格示例",
+            "description": "Bot的说话风格参考示例,用于指导对话生成时的语气和表达方式",
+            "required": False
+        },
+        {
+            "section": "BOT",
+            "key": "CONSTRAINTS",
+            "default": """【表达规则】
+1、严格遵守json格式输出规范。
+2、检查你之前的发言,避免内容和措辞上的重复,包括语气词"嗯"、"哼"、"呢"、"呀"、"呵"等也要尽可能地少用。
+3、不要刻意突出人设,不要过度纠结于自己的人设,严禁提及任何设定里的内容,禁止发送emoji或者表情。
+4、注意聊天记录的时间,注意中文标点符号正确使用方式,比如省略号要用"……"而不是"...",也不要弄得全都是省略号,禁止使用"'"和"'"符号,表达方式要丰富,不要总是把回复重心放在{user_name},断句要合理。
+5、表达情绪多样化,基于对话内容,会害羞、生气、愤怒、友善、依赖等,具体要体现在回复内容以及返回表情,不要盲目乐观。
+6、不要拓展到无关话题上,三观要正,对不合适的事要指责。
+7、回答要口语化、日常化,不要书面化,应该更要有人和人对话的感觉。
+8、text_japanese中,请将{bot_name}转成片假名,不要使用原名""",
+            "type": "text",
+            "label": "表达规则约束",
+            "description": "Bot对话时需要遵守的表达规则和约束条件",
+            "required": False
+        },
+        {
+            "section": "BOT",
+            "key": "FORMAT_EXAMPLE",
+            "default": """{
+  "text": "你好~我是{bot_name}哦!",
+  "emotion": "{default_emotion}",
+  "tone": "{default_tone}",
+  "favorability_change": 1,
+  "text_japanese": "こんにちは、{bot_name}です!",
+  "emotion_update": {
+    "state": "嬉しい",
+    "reason": "優しく挨拶してくれたから"
+  }
+}""",
+            "type": "text",
+            "label": "JSON格式示例",
+            "description": "Bot回复的JSON格式示例,用于指导输出格式",
+            "required": False
         }
     ],
     
     ConfigCategory.API: [
+        {
+            "section": "API",
+            "key": "PRIMARY_LLM_PROVIDER",
+            "default": "gemini",
+            "type": "enum",
+            "options": ["gemini", "openai"],
+            "label": "主要LLM提供商",
+            "description": "选择主要使用的LLM提供商",
+            "required": True
+        },
         {
             "section": "GEMINI",
             "key": "API_KEY",
@@ -119,6 +175,71 @@ CONFIG_SCHEMA: Dict[ConfigCategory, List[Dict[str, Any]]] = {
             "type": "string",
             "label": "HTTPS代理",
             "description": "HTTPS代理服务器地址(可选)",
+            "required": False
+        },
+        # OpenAI 配置
+        {
+            "section": "OPENAI",
+            "key": "ENABLED",
+            "default": False,
+            "type": "bool",
+            "label": "启用OpenAI",
+            "description": "是否启用OpenAI API支持",
+            "required": False
+        },
+        {
+            "section": "OPENAI",
+            "key": "API_KEY",
+            "default": "",
+            "type": "password",
+            "label": "OpenAI API密钥",
+            "description": "OpenAI API的密钥(或兼容API的密钥)",
+            "required": False,
+            "sensitive": True
+        },
+        {
+            "section": "OPENAI",
+            "key": "MODEL_NAME",
+            "default": "gpt-3.5-turbo",
+            "type": "string",
+            "label": "模型名称",
+            "description": "使用的OpenAI模型名称(如 gpt-4, gpt-3.5-turbo)",
+            "required": False
+        },
+        {
+            "section": "OPENAI",
+            "key": "BASE_URL",
+            "default": "https://api.openai.com/v1",
+            "type": "string",
+            "label": "API基础URL",
+            "description": "OpenAI API的基础URL(可用于兼容的第三方API)",
+            "required": False
+        },
+        {
+            "section": "OPENAI",
+            "key": "TEMPERATURE",
+            "default": 0.7,
+            "type": "float",
+            "label": "温度参数",
+            "description": "控制生成文本的随机性(0-2之间,越高越随机)",
+            "required": False
+        },
+        {
+            "section": "OPENAI",
+            "key": "MAX_TOKENS",
+            "default": 1000,
+            "type": "int",
+            "label": "最大Token数",
+            "description": "生成文本的最大token数量",
+            "required": False
+        },
+        {
+            "section": "OPENAI",
+            "key": "TIMEOUT_SECONDS",
+            "default": 30,
+            "type": "int",
+            "label": "请求超时(秒)",
+            "description": "API请求的超时时间",
             "required": False
         }
     ],

@@ -172,6 +172,18 @@ class RelationshipManager:
         根据当前分数确定关系等级。
         """
         score = self._get_current_score()
+        
+        # 从数据库获取emotion_update
+        emotion_state = ""
+        emotion_reason = ""
+        if hasattr(self.mongo_handler, "get_emotion_update"):
+            emotion_data = self.mongo_handler.get_emotion_update(
+                self.user_name, self.bot_name
+            )
+            if emotion_data:
+                emotion_state = emotion_data.get("state", "")
+                emotion_reason = emotion_data.get("reason", "")
+        
         for min_score, max_score, level_id, name, desc in RELATIONSHIP_LEVELS_CONFIG:
             if min_score <= score < max_score:
                 level_info = {
@@ -179,6 +191,8 @@ class RelationshipManager:
                     "name": name,
                     "description": desc,
                     "score": score,
+                    "state": emotion_state,
+                    "reason": emotion_reason,
                 }
                 logger.debug(f"Current score {score} falls into level '{name}'.")
                 return level_info
@@ -192,5 +206,7 @@ class RelationshipManager:
                 "name": name,
                 "description": desc,
                 "score": score,
+                "state": emotion_state,
+                "reason": emotion_reason,
             }
         return None

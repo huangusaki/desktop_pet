@@ -95,6 +95,7 @@ class AppServices:
     avatar_base_path: Optional[str] = None
     bot_avatar_path: Optional[str] = None
     user_avatar_path: Optional[str] = None
+    bot_window: Optional[Any] = None  # Reference to desktop window for web server
 
 
 @dataclass
@@ -195,6 +196,10 @@ class ApplicationContext:
         if not self._gui or not self._gui.bot_window:
             logger.critical("主程序: GUI组件初始化失败,正在退出")
             return False
+        
+        # Set bot_window reference in services for web server access
+        self._services.bot_window = self._gui.bot_window
+        
         self._connect_signals()
         
         # 启动Web服务器（在显示窗口之前）
@@ -305,29 +310,56 @@ class ApplicationContext:
             relationship_manager=services.relationship_manager,
         )
         
-        logger.info("正在初始化Gemini客户端...")
-        try:
-            api_key = config_manager.get_gemini_api_key()
-            if not api_key or api_key == "YOUR_API_KEY_HERE":
-                logger.critical("API密钥错误: 请在 config/settings.ini 中配置主聊天Gemini API密钥")
+        # 根据配置选择主要LLM提供商
+        primary_provider = config_manager.get_primary_llm_provider()
+        logger.info(f"正在初始化主要LLM客户端 (提供商: {primary_provider})...")
+        
+        if primary_provider == "openai":
+            # 使用 OpenAI 作为主要LLM
+            try:
+                from src.llm.openai_client import OpenAIClient
+                
+                api_key = config_manager.get_openai_api_key()
+                if not api_key or api_key == "YOUR_API_KEY_HERE" or not api_key.strip():
+                    logger.critical("OpenAI API密钥错误: 请在 config/settings.ini 中配置 OpenAI API密钥")
+                    return None
+                
+                # 创建OpenAI客户端包装器,使其兼容GeminiClient接口
+                # 注意: 这里需要一个适配器来让OpenAI客户端兼容现有的GeminiClient接口
+                logger.warning("OpenAI客户端作为主LLM尚未完全集成到聊天系统,将回退到Gemini")
+                # TODO: 实现 OpenAI 到 GeminiClient 的适配器
+                primary_provider = "gemini"  # 暂时回退
+                
+            except Exception as e:
+                logger.error(f"OpenAI客户端初始化失败: {e}, 回退到Gemini", exc_info=True)
+                primary_provider = "gemini"
+        
+        # 默认使用 Gemini 或回退到 Gemini
+        if primary_provider == "gemini":
+            try:
+                api_key = config_manager.get_gemini_api_key()
+                if not api_key or api_key == "YOUR_API_KEY_HERE":
+                    logger.critical("API密钥错误: 请在 config/settings.ini 中配置 Gemini API密钥")
+                    return None
+                    
+                services.gemini_client = self._GeminiClientClass(
+                    api_key=api_key,
+                    model_name=config_manager.get_gemini_model_name(),
+                    bot_name=config_manager.get_bot_name(),
+                    user_name=config_manager.get_user_name(),
+                    bot_persona=config_manager.get_bot_persona(),
+                    prompt_builder=services.prompt_builder,
+                    available_emotions=services.available_emotions,
+                    mongo_handler=services.mongo_handler,
+                    config_manager=config_manager,
+                )
+                logger.info("Gemini客户端已初始化")
+            except Exception as e:
+                logger.critical(
+                    f"Gemini客户端初始化异常: {e}", exc_info=True
+                )
                 return None
-            services.gemini_client = self._GeminiClientClass(
-                api_key=api_key,
-                model_name=config_manager.get_gemini_model_name(),
-                bot_name=config_manager.get_bot_name(),
-                user_name=config_manager.get_user_name(),
-                bot_persona=config_manager.get_bot_persona(),
-                prompt_builder=services.prompt_builder,
-                available_emotions=services.available_emotions,
-                mongo_handler=services.mongo_handler,
-                config_manager=config_manager,
-            )
-            logger.info("Gemini客户端已初始化")
-        except Exception as e:
-            logger.critical(
-                f"Gemini客户端初始化异常: {e}", exc_info=True
-            )
-            return None
+
             
         if self._AgentCoreClass and services.gemini_client:
             logger.info("正在初始化Agent核心...")

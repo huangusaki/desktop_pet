@@ -16,6 +16,7 @@ export interface ConfigItem {
     category: string;
     required: boolean;
     sensitive: boolean;
+    options?: string[];  // Available options for enum types
 }
 
 export interface ConfigCategory {

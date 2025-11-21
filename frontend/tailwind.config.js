@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+    darkMode: 'class',
     content: [
         "./index.html",
         "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,8 +8,8 @@ export default {
     theme: {
         extend: {
             colors: {
-                'glass-white': 'rgba(255, 255, 255, 0.7)',
-                'glass-dark': 'rgba(0, 0, 0, 0.6)',
+                'glass-white': 'rgba(255, 255, 255, 0.8)',
+                'glass-dark': 'rgba(0, 0, 0, 0.05)',
             },
             animation: {
                 'fade-in': 'fadeIn 0.5s ease-out',

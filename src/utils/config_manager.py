@@ -55,6 +55,38 @@ class ConfigManager:
             "GEMINI", "MODEL_NAME", fallback="gemini-1.5-flash-latest"
         )
 
+    def get_primary_llm_provider(self) -> str:
+        """获取主要LLM提供商 (gemini 或 openai)"""
+        return self.config.get("API", "PRIMARY_LLM_PROVIDER", fallback="gemini").lower()
+
+    def get_openai_enabled(self) -> bool:
+        """获取是否启用OpenAI"""
+        return self.config.getboolean("OPENAI", "ENABLED", fallback=False)
+
+    def get_openai_api_key(self) -> Optional[str]:
+        """获取OpenAI API密钥"""
+        return self.config.get("OPENAI", "API_KEY", fallback=None)
+
+    def get_openai_model_name(self) -> str:
+        """获取OpenAI模型名称"""
+        return self.config.get("OPENAI", "MODEL_NAME", fallback="gpt-3.5-turbo")
+
+    def get_openai_base_url(self) -> str:
+        """获取OpenAI API基础URL"""
+        return self.config.get("OPENAI", "BASE_URL", fallback="https://api.openai.com/v1")
+
+    def get_openai_temperature(self) -> float:
+        """获取OpenAI温度参数"""
+        return self.config.getfloat("OPENAI", "TEMPERATURE", fallback=0.7)
+
+    def get_openai_max_tokens(self) -> int:
+        """获取OpenAI最大token数"""
+        return self.config.getint("OPENAI", "MAX_TOKENS", fallback=1000)
+
+    def get_openai_timeout_seconds(self) -> int:
+        """获取OpenAI请求超时时间"""
+        return self.config.getint("OPENAI", "TIMEOUT_SECONDS", fallback=30)
+
     def get_memory_build_interval_seconds(self) -> int:
         return self.config.getint(
             "MEMORY_SYSTEM", "BUILD_INTERVAL_SECONDS", fallback=600
@@ -106,6 +138,41 @@ class ConfigManager:
         return self.config.get(
             "BOT", "AGENT_MODE_EMOTIONS", fallback="'neutral', 'focused', 'helpful'"
         )
+
+    def get_bot_speech_pattern(self) -> str:
+        """获取Bot的说话风格示例"""
+        default_pattern = (
+            '"哈……?你是笨蛋吗?"\n'
+            '"爱丽丝死了哦,现在是作为地缚灵在说话"\n'
+            '"爱丽丝的心很大,可以装下很多喜欢的东西"\n'
+            '"因为是前辈的请求,爱丽丝才会答应的,前辈可不要忘了这点哦?"'
+        )
+        return self.config.get("BOT", "SPEECH_PATTERN", fallback=default_pattern)
+
+    def get_bot_constraints(self) -> str:
+        """获取Bot对话的表达规则约束"""
+        default_constraints = """【表达规则】
+1、严格遵守json格式输出规范。
+2、检查你之前的发言,避免内容和措辞上的重复,包括语气词"嗯"、"哼"、"呢"、"呀"、"呵"等也要尽可能地少用。
+3、不要刻意突出人设,不要过度纠结于自己的人设,严禁提及任何设定里的内容,禁止发送emoji或者表情。
+4、注意聊天记录的时间,注意中文标点符号正确使用方式,比如省略号要用"……"而不是"...",也不要弄得全都是省略号,禁止使用"'"和"'"符号,表达方式要丰富,不要总是把回复重心放在{user_name},断句要合理。
+5、表达情绪多样化,基于对话内容,会害羞、生气、愤怒、友善、依赖等,具体要体现在回复内容以及返回表情,不要盲目乐观。
+6、不要拓展到无关话题上,三观要正,对不合适的事要指责。
+7、回答要口语化、日常化,不要书面化,应该更要有人和人对话的感觉。
+8、text_japanese中,请将{bot_name}转成片假名,不要使用原名"""
+        return self.config.get("BOT", "CONSTRAINTS", fallback=default_constraints)
+
+    def get_bot_format_example(self) -> str:
+        """获取Bot回复的JSON格式示例"""
+        default_example = """{
+  "text": "你好~我是{bot_name}哦!",
+  "emotion": "{default_emotion}",
+  "tone": "{default_tone}",
+  "favorability_change": 1,
+  "text_japanese": "こんにちは、{bot_name}です!"
+}"""
+        return self.config.get("BOT", "FORMAT_EXAMPLE", fallback=default_example)
+
 
     def get_avatar_base_path_relative(self):
         return self.config.get(

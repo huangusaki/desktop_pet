@@ -43,9 +43,12 @@ export const ChatWindow: React.FC = () => {
                         p-3 
                         rounded-full 
                         glass
-                        text-white/60 
-                        hover:text-white 
-                        hover:bg-white/10 
+                        text-slate-500 
+                        hover:text-slate-800 
+                        hover:bg-white/50 
+                        dark:text-white/60 
+                        dark:hover:text-white 
+                        dark:hover:bg-white/10 
                         transition-all 
                         duration-200
                         shadow-lg

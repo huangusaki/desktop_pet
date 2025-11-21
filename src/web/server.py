@@ -447,13 +447,24 @@ class ChatWebServer:
             
             # Broadcast AI response (only if not an error)
             if not response_data.get("is_error", False):
+                bot_text = response_data.get("text", "")
+                bot_emotion = response_data.get("emotion", "default")
+                
+                # Update desktop window立绘
+                if self.services.bot_window and hasattr(self.services.bot_window, 'update_speech_and_emotion'):
+                    try:
+                        self.services.bot_window.update_speech_and_emotion(bot_text, bot_emotion)
+                        logger.debug(f"桌面窗口已更新: emotion={bot_emotion}")
+                    except Exception as e:
+                        logger.warning(f"更新桌面窗口失败: {e}")
+                
                 await self.broadcast({
                     "type": "message",
                     "data": {
                         "message_id": f"msg_{uuid.uuid4().hex[:8]}",
                         "sender": self.services.config_manager.get_bot_name(),
-                        "text": response_data.get("text", ""),
-                        "emotion": response_data.get("emotion", "default"),
+                        "text": bot_text,
+                        "emotion": bot_emotion,
                         "timestamp": datetime.utcnow().isoformat()
                     }
                 })

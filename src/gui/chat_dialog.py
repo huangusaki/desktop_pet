@@ -530,6 +530,23 @@ class ChatDialog(QDialog):
                 )
             elif self.relationship_manager:
                 logger.info("LLM decided no change in favorability.")
+            
+            # 处理emotion_update
+            emotion_update = response_data.get("emotion_update")
+            if emotion_update and isinstance(emotion_update, dict):
+                if "state" in emotion_update and "reason" in emotion_update:
+                    logger.info(f"LLM returned emotion_update: {emotion_update}")
+                    if self.mongo_handler and self.mongo_handler.is_connected():
+                        self.asyncio_helper.schedule_task(
+                            self.mongo_handler.update_emotion_update(
+                                user_name=self.user_name,
+                                bot_name=self.bot_name,
+                                emotion_data=emotion_update
+                            )
+                        )
+                else:
+                    logger.warning(f"emotion_update缺少必需字段: {emotion_update}")
+            
             if text_japanese and text_japanese.strip():
                 self.chat_text_for_tts_ready.emit(text_japanese, llm_tone)
             if not is_error_response:

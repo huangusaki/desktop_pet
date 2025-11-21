@@ -1,8 +1,10 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfigStore } from '../stores/useConfigStore';
+import { useThemeStore } from '../stores/useThemeStore';
 import type { ConfigItem } from '../api/configApi';
 import { PasswordInput } from './PasswordInput';
+import { CustomSelect } from './CustomSelect';
 import {
     SettingsIcon,
     BasicIcon,
@@ -12,9 +14,10 @@ import {
     ScreenIcon,
     TtsIcon,
     AgentIcon,
-    AvatarIcon
+    AvatarIcon,
+    MoonIcon,
+    SunIcon
 } from './Icons';
-
 // Category names and labels with icons
 const CATEGORIES = [
     { id: 'basic', label: '基础设置', icon: BasicIcon },
@@ -42,6 +45,7 @@ export const ConfigPage: React.FC = () => {
         resetChanges,
         restartApp,
     } = useConfigStore();
+    const { theme, toggleTheme } = useThemeStore();
 
     // Load configs on mount
     useEffect(() => {
@@ -55,9 +59,12 @@ export const ConfigPage: React.FC = () => {
 
         const commonInputClass = `
       w-full px-4 py-2 rounded-lg 
-      bg-white/5 border border-white/10
-      text-white placeholder-white/30
-      focus:outline-none focus:border-blue-500/50
+      bg-white/80 backdrop-blur-sm border border-slate-200/80
+      text-slate-800 placeholder-slate-400
+      focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent
+      dark:bg-white/5 dark:border-white/5
+      dark:text-white dark:placeholder-white/30
+      dark:focus:ring-blue-400/50
       transition-all duration-200
     `;
 
@@ -69,8 +76,8 @@ export const ConfigPage: React.FC = () => {
                         onClick={() => handleChange(!item.value)}
                         className={`
               relative inline-flex h-6 w-11 items-center rounded-full
-              transition-colors duration-200 ease-in-out
-              ${item.value ? 'bg-blue-500' : 'bg-white/10'}
+              transition-all duration-300 ease-in-out
+              ${item.value ? 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-slate-200 dark:bg-white/10'}
             `}
                     >
                         <span
@@ -81,7 +88,7 @@ export const ConfigPage: React.FC = () => {
               `}
                         />
                     </button>
-                    <span className="text-sm text-white/60">
+                    <span className="text-sm text-slate-600 dark:text-white/60">
                         {item.value ? '启用' : '禁用'}
                     </span>
                 </div>
@@ -116,6 +123,17 @@ export const ConfigPage: React.FC = () => {
             );
         }
 
+        // Enum type - Dropdown select
+        if (item.value_type === 'enum' && item.options) {
+            return (
+                <CustomSelect
+                    value={item.value || item.default_value}
+                    onChange={(val) => handleChange(val)}
+                    options={item.options}
+                />
+            );
+        }
+
         // Password field
         if (item.value_type === 'password') {
             return (
@@ -141,7 +159,7 @@ export const ConfigPage: React.FC = () => {
     if (isLoading && !configs) {
         return (
             <div className="flex items-center justify-center h-screen">
-                <div className="text-white text-xl">加载配置中...</div>
+                <div className="text-slate-600 dark:text-white text-xl">加载配置中...</div>
             </div>
         );
     }
@@ -151,12 +169,13 @@ export const ConfigPage: React.FC = () => {
     return (
         <div className="flex h-screen bg-transparent">
             {/* Left Sidebar - Category Navigation */}
-            <div className="w-20 md:w-64 glass-strong border-r border-white/10 p-4 md:p-6 flex flex-col transition-all duration-300">
+            <div className="w-20 md:w-64 glass-strong border-r border-slate-200 dark:border-white/10 p-4 md:p-6 flex flex-col transition-all duration-300">
                 <div className="mb-8 flex justify-center md:justify-start">
                     <button
                         onClick={() => navigate('/')}
                         className="
-              text-white/60 hover:text-white
+              text-slate-500 hover:text-slate-800
+              dark:text-white/60 dark:hover:text-white
               transition-colors duration-200
               flex items-center gap-2
             "
@@ -167,7 +186,7 @@ export const ConfigPage: React.FC = () => {
                     </button>
                 </div>
 
-                <div className="flex items-center justify-center md:justify-start gap-3 mb-6 text-white">
+                <div className="flex items-center justify-center md:justify-start gap-3 mb-6 text-slate-800 dark:text-white">
                     <SettingsIcon className="w-6 h-6 flex-shrink-0" />
                     <h2 className="text-xl font-bold hidden md:block">配置管理</h2>
                 </div>
@@ -182,13 +201,13 @@ export const ConfigPage: React.FC = () => {
                 w-full text-center md:text-left px-2 md:px-4 py-3 rounded-lg
                 transition-all duration-200 flex items-center justify-center md:justify-start gap-3
                 ${currentCategory === cat.id
-                                    ? 'bg-blue-500/20 text-white border border-blue-500/30'
-                                    : 'text-white/60 hover:text-white hover:bg-white/5'
+                                    ? 'bg-gradient-to-r from-blue-500/10 to-purple-500/10 text-blue-600 border-l-4 border-blue-500 dark:text-blue-400'
+                                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:text-white/60 dark:hover:text-white dark:hover:bg-white/5 border-l-4 border-transparent'
                                 }
               `}
                             title={cat.label}
                         >
-                            <cat.icon className="w-5 h-5 flex-shrink-0" />
+                            <cat.icon className={`w-5 h-5 flex-shrink-0 transition-transform duration-200 ${currentCategory === cat.id ? 'scale-110' : 'group-hover:scale-110'}`} />
                             <span className="hidden md:inline">{cat.label}</span>
                         </button>
                     ))}
@@ -197,12 +216,31 @@ export const ConfigPage: React.FC = () => {
                 {/* Actions */}
                 <div className="mt-auto space-y-3">
                     <button
+                        onClick={toggleTheme}
+                        className="
+              w-full px-2 md:px-4 py-2 rounded-lg
+              bg-slate-100 text-slate-600
+              hover:bg-slate-200
+              border border-slate-200
+              dark:bg-white/5 dark:text-white/60
+              dark:hover:bg-white/10 dark:border-white/10
+              transition-all duration-200
+              flex items-center justify-center gap-2
+            "
+                        title={theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'}
+                    >
+                        {theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />}
+                        <span className="hidden md:inline">{theme === 'light' ? '暗色模式' : '亮色模式'}</span>
+                    </button>
+                    <button
                         onClick={restartApp}
                         className="
               w-full px-2 md:px-4 py-2 rounded-lg
-              bg-purple-500/20 text-purple-300
-              hover:bg-purple-500/30
-              border border-purple-500/30
+              bg-purple-50 text-purple-600
+              hover:bg-purple-100
+              border border-purple-200
+              dark:bg-purple-500/20 dark:text-purple-300
+              dark:hover:bg-purple-500/30 dark:border-purple-500/30
               transition-all duration-200
               flex items-center justify-center gap-2
             "
@@ -217,12 +255,12 @@ export const ConfigPage: React.FC = () => {
             {/* Right Content Area */}
             <div className="flex-1 flex flex-col min-w-0">
                 {/* Header */}
-                <div className="glass-strong border-b border-white/10 p-4 md:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="glass-strong border-b border-slate-200 dark:border-white/10 p-4 md:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                        <h1 className="text-xl md:text-2xl font-bold text-white">
+                        <h1 className="text-xl md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600 dark:from-white dark:to-white/80">
                             {CATEGORIES.find(c => c.id === currentCategory)?.label}
                         </h1>
-                        <p className="text-white/50 text-xs md:text-sm mt-1">
+                        <p className="text-slate-500 dark:text-white/50 text-xs md:text-sm mt-1">
                             修改后需要保存并重启应用
                         </p>
                     </div>
@@ -234,9 +272,12 @@ export const ConfigPage: React.FC = () => {
                                 disabled={isSaving}
                                 className="
                   px-3 md:px-6 py-1.5 md:py-2 rounded-lg text-sm md:text-base
-                  bg-white/5 text-white/60
-                  hover:bg-white/10 hover:text-white
-                  border border-white/10
+                  bg-white text-slate-500
+                  hover:bg-slate-50 hover:text-slate-700
+                  border border-slate-200
+                  dark:bg-white/5 dark:text-white/60
+                  dark:hover:bg-white/10 dark:hover:text-white
+                  dark:border-white/10
                   transition-all duration-200
                   disabled:opacity-50 disabled:cursor-not-allowed
                 "
@@ -252,8 +293,8 @@ export const ConfigPage: React.FC = () => {
                 px-4 md:px-6 py-1.5 md:py-2 rounded-lg text-sm md:text-base
                 transition-all duration-200
                 ${hasUnsavedChanges && !isSaving
-                                    ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:scale-105 shadow-lg'
-                                    : 'bg-white/10 text-white/30 cursor-not-allowed'
+                                    ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:shadow-lg hover:shadow-blue-500/25 hover:scale-105'
+                                    : 'bg-slate-100 text-slate-400 dark:bg-white/10 dark:text-white/30 cursor-not-allowed'
                                 }
               `}
                         >
@@ -263,30 +304,30 @@ export const ConfigPage: React.FC = () => {
                 </div>
 
                 {/* Config Items */}
-                <div className="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
-                    <div className="max-w-full md:max-w-4xl mx-auto space-y-4 md:space-y-6">
+                <div className="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-white/20 scrollbar-track-transparent">
+                    <div className="max-w-full md:max-w-4xl mx-auto space-y-4 md:space-y-6 animate-fade-in-up">
                         {currentConfigs.map((item) => (
                             <div
                                 key={`${item.section}.${item.key}`}
-                                className="glass rounded-xl p-4 md:p-6 border border-white/10 hover:border-white/20 transition-all duration-200"
+                                className="glass rounded-xl p-4 md:p-6 border border-white/20 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
                             >
                                 <div className="mb-4">
                                     <div className="flex items-center gap-2 mb-2">
-                                        <label className="text-white font-medium text-sm md:text-base">
+                                        <label className="text-slate-800 dark:text-white font-medium text-sm md:text-base">
                                             {item.label}
                                         </label>
                                         {item.required && (
-                                            <span className="text-red-400 text-sm">*</span>
+                                            <span className="text-red-500 dark:text-red-400 text-sm">*</span>
                                         )}
                                     </div>
-                                    <p className="text-white/50 text-xs md:text-sm">
+                                    <p className="text-slate-500 dark:text-white/50 text-xs md:text-sm">
                                         {item.description}
                                     </p>
                                 </div>
 
                                 {renderConfigInput(item)}
 
-                                <div className="mt-2 text-[10px] md:text-xs text-white/30">
+                                <div className="mt-2 text-[10px] md:text-xs text-slate-400 dark:text-white/30">
                                     {item.section}.{item.key}
                                     {item.default_value !== undefined && (
                                         <span className="ml-2">

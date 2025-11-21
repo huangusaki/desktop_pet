@@ -59,7 +59,8 @@ class ConfigService:
                     description=schema["description"],
                     category=category,
                     required=schema.get("required", False),
-                    sensitive=schema.get("sensitive", False)
+                    sensitive=schema.get("sensitive", False),
+                    options=schema.get("options", None)
                 )
                 config_items.append(config_item)
             
