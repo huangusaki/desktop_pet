@@ -16,7 +16,8 @@ import {
     AgentIcon,
     AvatarIcon,
     MoonIcon,
-    SunIcon
+    SunIcon,
+    ArrowLeftIcon
 } from './Icons';
 // Category names and labels with icons
 const CATEGORIES = [
@@ -174,14 +175,19 @@ export const ConfigPage: React.FC = () => {
                     <button
                         onClick={() => navigate('/')}
                         className="
-              text-slate-500 hover:text-slate-800
-              dark:text-white/60 dark:hover:text-white
-              transition-colors duration-200
-              flex items-center gap-2
-            "
+                            group
+                            text-slate-500 hover:text-slate-800
+                            dark:text-white/60 dark:hover:text-white
+                            transition-colors duration-200
+                            flex items-center gap-2
+                            text-sm font-medium
+                            hover:-translate-x-1
+                        "
                         title="返回聊天"
                     >
-                        <span>←</span>
+                        <div className="p-2 rounded-full bg-white/50 dark:bg-white/5 group-hover:bg-white dark:group-hover:bg-white/10 transition-colors shadow-sm">
+                            <ArrowLeftIcon className="w-5 h-5" />
+                        </div>
                         <span className="hidden md:inline">返回聊天</span>
                     </button>
                 </div>

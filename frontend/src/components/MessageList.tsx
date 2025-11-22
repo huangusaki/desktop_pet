@@ -1,18 +1,36 @@
-﻿import React, { useEffect, useRef } from 'react';
+﻿import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Message } from './Message';
 import { useChatStore } from '../stores/chatStore';
 
 export const MessageList: React.FC = () => {
     const { messages, isTyping, config } = useChatStore();
-    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const [hasInitialized, setHasInitialized] = useState(false);
 
     // 自动滚动到底部
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, isTyping]);
+    useLayoutEffect(() => {
+        const scrollContainer = scrollRef.current;
+        if (!scrollContainer) return;
+
+        // 如果是首次加载且有消息，直接跳转到底部
+        if (!hasInitialized && messages.length > 0) {
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+            setHasInitialized(true);
+        }
+        // 否则使用平滑滚动
+        else if (hasInitialized) {
+            scrollContainer.scrollTo({
+                top: scrollContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+    }, [messages, isTyping, hasInitialized]);
 
     return (
-        <div className="flex-1 overflow-y-auto p-4 pb-32 bg-transparent scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-white/20 scrollbar-track-transparent">
+        <div
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto p-4 pb-32 bg-transparent scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-white/20 scrollbar-track-transparent"
+        >
             <div className="max-w-3xl mx-auto">
                 {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-white/40 text-center py-20">
@@ -47,8 +65,6 @@ export const MessageList: React.FC = () => {
                         </div>
                     </div>
                 )}
-
-                <div ref={messagesEndRef} />
             </div>
         </div>
     );

@@ -17,6 +17,7 @@ import mimetypes
 import uuid
 from src.utils.config_service import ConfigService
 from src.utils.config_schema import ConfigItem
+from src.utils.preset_models import PresetManager, Preset
 
 logger = logging.getLogger("ChatWebServer")
 
@@ -64,6 +65,28 @@ class ConfigSaveResponse(BaseModel):
     errors: Optional[Dict[str, str]] = None
 
 
+class PresetCreateRequest(BaseModel):
+    """创建预设请求"""
+    name: str
+    bot_name: str
+    bot_persona: str
+    speech_pattern: str = ""
+    constraints: str = ""
+    format_example: str = ""
+    avatar_filename: str = "default_preset.png"
+
+
+class PresetUpdateRequest(BaseModel):
+    """更新预设请求"""
+    name: Optional[str] = None
+    bot_name: Optional[str] = None
+    bot_persona: Optional[str] = None
+    speech_pattern: Optional[str] = None
+    constraints: Optional[str] = None
+    format_example: Optional[str] = None
+    avatar_filename: Optional[str] = None
+
+
 class ChatWebServer:
     """FastAPI web server for chat interface."""
     
@@ -83,10 +106,21 @@ class ChatWebServer:
         # Initialize config service
         self.config_service = ConfigService(services.config_manager)
         
+        # Initialize preset manager with config_manager for default preset creation
+        project_root = services.config_manager.get_project_root()
+        presets_dir = os.path.join(project_root, "data", "presets")
+        avatars_dir = os.path.join(project_root, "data", "presets", "avatars")
+        self.preset_manager = PresetManager(
+            presets_dir=presets_dir, 
+            avatars_dir=avatars_dir,
+            config_manager=services.config_manager
+        )
+        
         self._setup_cors()
         self._setup_routes()
         
         logger.info("ChatWebServer 已初始化")
+
     
     def _setup_cors(self):
         """Configure CORS to allow access from browsers (including mobile)."""
@@ -354,6 +388,222 @@ class ChatWebServer:
             except Exception as e:
                 logger.error(f"Error restarting application: {e}", exc_info=True)
                 return {"success": False, "message": f"重启失败: {str(e)}"}
+        
+        # Preset Management API Routes
+        @self.app.get("/api/presets")
+        async def get_all_presets():
+            """获取所有预设列表"""
+            try:
+                presets = self.preset_manager.get_all_presets()
+                return {"presets": [preset.model_dump() for preset in presets]}
+            except Exception as e:
+                logger.error(f"Error getting presets: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/api/presets/{preset_id}")
+        async def get_preset(preset_id: str):
+            """获取单个预设详情"""
+            try:
+                preset = self.preset_manager.get_preset_by_id(preset_id)
+                if preset is None:
+                    raise HTTPException(status_code=404, detail=f"预设 {preset_id} 未找到")
+                return preset.model_dump()
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error getting preset {preset_id}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/presets")
+        async def create_preset(request: PresetCreateRequest):
+            """创建新预设"""
+            try:
+                preset_data = request.model_dump()
+                preset = self.preset_manager.create_preset(preset_data)
+                if preset is None:
+                    raise HTTPException(status_code=500, detail="创建预设失败")
+                return {"success": True, "preset": preset.model_dump()}
+            except Exception as e:
+                logger.error(f"Error creating preset: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.put("/api/presets/{preset_id}")
+        async def update_preset(preset_id: str, request: PresetUpdateRequest):
+            """更新预设"""
+            try:
+                # 只包含非None的字段
+                update_data = {k: v for k, v in request.model_dump().items() if v is not None}
+                preset = self.preset_manager.update_preset(preset_id, update_data)
+                if preset is None:
+                    raise HTTPException(status_code=404, detail=f"预设 {preset_id} 未找到")
+                return {"success": True, "preset": preset.model_dump()}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error updating preset {preset_id}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.delete("/api/presets/{preset_id}")
+        async def delete_preset(preset_id: str):
+            """删除预设"""
+            try:
+                success = self.preset_manager.delete_preset(preset_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail=f"预设 {preset_id} 未找到")
+                return {"success": True, "message": "预设已删除"}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error deleting preset {preset_id}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/presets/{preset_id}/activate")
+        async def activate_preset(preset_id: str):
+            """激活预设并更新ConfigManager"""
+            try:
+                # 激活预设
+                preset = self.preset_manager.activate_preset(preset_id)
+                if preset is None:
+                    raise HTTPException(status_code=404, detail=f"预设 {preset_id} 未找到")
+                
+                # 更新ConfigManager中的配置
+                config_manager = self.services.config_manager
+                config_manager.config.set("BOT", "NAME", preset.bot_name)
+                config_manager.config.set("BOT", "PERSONA", preset.bot_persona)
+                if preset.speech_pattern:
+                    config_manager.config.set("BOT", "SPEECH_PATTERN", preset.speech_pattern)
+                if preset.constraints:
+                    config_manager.config.set("BOT", "CONSTRAINTS", preset.constraints)
+                if preset.format_example:
+                    config_manager.config.set("BOT", "FORMAT_EXAMPLE", preset.format_example)
+                
+                # 更新头像路径
+                if preset.avatar_filename and self.preset_manager.avatar_exists(preset.avatar_filename):
+                    avatar_path = self.preset_manager.get_avatar_path(preset.avatar_filename)
+                    # 更新services中的bot_avatar_path
+                    self.services.bot_avatar_path = avatar_path
+                
+                # 广播预设切换事件
+                await self.broadcast({
+                    "type": "preset_activated",
+                    "preset_id": preset.id,
+                    "preset_name": preset.name,
+                    "bot_name": preset.bot_name
+                })
+                
+                logger.info(f"预设已激活: {preset.name} (id={preset.id})")
+                return {
+                    "success": True,
+                    "message": f"预设 '{preset.name}' 已激活",
+                    "preset": preset.model_dump()
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error activating preset {preset_id}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/presets/from-current-config")
+        async def create_preset_from_current_config():
+            """从当前ConfigManager配置创建新预设"""
+            try:
+                config_manager = self.services.config_manager
+                
+                # 从当前配置读取信息
+                bot_name = config_manager.get_bot_name()
+                bot_persona = config_manager.get_bot_persona()
+                speech_pattern = config_manager.get_bot_speech_pattern()
+                constraints = config_manager.get_bot_constraints()
+                format_example = config_manager.get_bot_format_example()
+                
+                # 生成预设名称
+                preset_name = f"{bot_name}"
+                
+                # 创建预设数据
+                preset_data = {
+                    "name": preset_name,
+                    "bot_name": bot_name,
+                    "bot_persona": bot_persona,
+                    "speech_pattern": speech_pattern,
+                    "constraints": constraints,
+                    "format_example": format_example,
+                    "avatar_filename": "default_preset.png",
+                    "is_active": False  # 新创建的预设默认不激活
+                }
+                
+                # 创建预设
+                preset = self.preset_manager.create_preset(preset_data)
+                if preset is None:
+                    raise HTTPException(status_code=500, detail="创建预设失败")
+                
+                logger.info(f"已从当前配置创建预设: {preset.name}")
+                return {
+                    "success": True,
+                    "message": f"已保存当前配置为好友 '{preset.name}'",
+                    "preset": preset.model_dump()
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error creating preset from current config: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/presets/avatars/upload")
+        async def upload_preset_avatar(file: UploadFile = File(...)):
+            """上传预设头像"""
+            try:
+                # 生成唯一文件名
+                file_ext = os.path.splitext(file.filename)[1]
+                filename = f"preset_{uuid.uuid4().hex[:8]}{file_ext}"
+                filepath = self.preset_manager.get_avatar_path(filename)
+                
+                # 保存文件
+                with open(filepath, "wb") as f:
+                    content = await file.read()
+                    f.write(content)
+                
+                logger.info(f"预设头像已上传: {filename}")
+                return {
+                    "success": True,
+                    "filename": filename,
+                    "url": f"/api/presets/avatars/{filename}"
+                }
+            except Exception as e:
+                logger.error(f"Error uploading preset avatar: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/api/presets/avatars/{filename}")
+        async def get_preset_avatar(filename: str):
+            """获取预设头像"""
+            try:
+                filepath = self.preset_manager.get_avatar_path(filename)
+                if not os.path.exists(filepath):
+                    raise HTTPException(status_code=404, detail="头像文件未找到")
+                return FileResponse(filepath)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error getting preset avatar {filename}: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/presets/reorder")
+        async def reorder_presets(request: Dict[str, List[str]]):
+            """重新排序预设"""
+            try:
+                preset_ids = request.get("preset_ids", [])
+                if not preset_ids:
+                    raise HTTPException(status_code=400, detail="未提供预设ID列表")
+                
+                success = self.preset_manager.reorder_presets(preset_ids)
+                if not success:
+                    raise HTTPException(status_code=500, detail="重新排序失败")
+                
+                return {"success": True, "message": "预设已重新排序"}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error reordering presets: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
         
         # WebSocket endpoint
         @self.app.websocket("/ws")

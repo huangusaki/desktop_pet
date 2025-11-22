@@ -20,9 +20,8 @@ class WebChatWindow(QMainWindow):
         self.setWindowTitle("Arisu Chat")
         self.resize(QSize(400, 600))
         
-        # Set window attributes to reduce flickering
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        # Let WebEngine handle its own rendering without Qt widget optimizations
+        # Removing these attributes allows WebEngine to use its native refresh rate
         
         # Set window icon if avatar path is provided
         if avatar_path and os.path.exists(avatar_path):
@@ -39,18 +38,16 @@ class WebChatWindow(QMainWindow):
         settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         
-        # Optimize scrolling and rendering
-        settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)
+        # Enable smooth scrolling animation
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
         
         # Create web view
         # Lazy import to avoid startup freeze
         from PyQt6.QtWebEngineWidgets import QWebEngineView
         self.web_view = QWebEngineView()
         
-        # Set web view attributes to reduce flickering during repaints
-        self.web_view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-        self.web_view.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        # WA_NativeWindow removed as it was preventing window from showing
+        # Let WebEngine use default rendering pipeline for optimal frame rate
+        # No widget attributes needed - WebEngine has its own GPU-accelerated rendering
         
         # Set background color to avoid transparency-related flickering
         self.web_view.page().setBackgroundColor(QColor("#1a1c2c"))

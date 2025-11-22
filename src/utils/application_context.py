@@ -325,9 +325,7 @@ class ApplicationContext:
                     return None
                 
                 # 创建OpenAI客户端包装器,使其兼容GeminiClient接口
-                # 注意: 这里需要一个适配器来让OpenAI客户端兼容现有的GeminiClient接口
                 logger.warning("OpenAI客户端作为主LLM尚未完全集成到聊天系统,将回退到Gemini")
-                # TODO: 实现 OpenAI 到 GeminiClient 的适配器
                 primary_provider = "gemini"  # 暂时回退
                 
             except Exception as e:
@@ -435,7 +433,7 @@ class ApplicationContext:
                 
             web_chat_window = WebChatWindow(
                 url="http://localhost:8765",
-                parent=bot_window,
+                parent=None,
                 avatar_path=services.bot_avatar_path
             )
             logger.info("Web聊天窗口预加载成功")
@@ -536,17 +534,10 @@ class ApplicationContext:
                 
                 self._gui.web_chat_window = WebChatWindow(
                     url="http://localhost:8765",
-                    parent=self._gui.bot_window,
+                    parent=None,
                     avatar_path=self._services.bot_avatar_path
                 )
                 logger.info("WebChatWindow instance created")
-            
-            # 确保窗口没有被最小化或隐藏
-            if self._gui.web_chat_window.isHidden():
-                self._gui.web_chat_window.show()
-            
-            self._gui.web_chat_window.raise_()
-            self._gui.web_chat_window.activateWindow()
             
             logger.info("Calculating window position...")
             # 定位窗口在Bot旁边
@@ -572,6 +563,13 @@ class ApplicationContext:
                     new_y = screen_geometry.top()
                 
                 self._gui.web_chat_window.move(new_x, new_y)
+
+            # 确保窗口没有被最小化或隐藏
+            if self._gui.web_chat_window.isHidden():
+                self._gui.web_chat_window.show()
+            
+            self._gui.web_chat_window.raise_()
+            self._gui.web_chat_window.activateWindow()
             
             logger.info("Web chat window opened successfully")
         except Exception as e:

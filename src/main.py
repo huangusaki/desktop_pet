@@ -29,6 +29,11 @@ if project_root not in sys.path:
 from src.utils.application_context import ApplicationContext
 from src.utils.logger_config import setup_logging
 
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+    "--disable-direct-composition "
+    "--enable-gpu-rasterization "
+    "--ignore-gpu-blocklist"
+)
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false;qt.multimedia.ffmpeg=false"
 logger = logging.getLogger("main")
 
@@ -105,9 +110,9 @@ if __name__ == "__main__":
             None, "依赖缺失", "Pillow 库未找到。请安装 Pillow: pip install Pillow"
         )
         sys.exit(1)
-    # Minimal Chromium flags - only disable partial updates to reduce flickering during repaints
-    # Note: More aggressive flags like --disable-threaded-compositing break rendering entirely
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--use-gl=desktop --disable-partial-raster"
+    # Use default Chromium behavior (no custom flags)
+    # This allows WebEngine to behave like a normal Chrome browser
+    # and automatically adapt to display refresh rate
     
     app = QApplication(sys.argv)
     context: Optional[ApplicationContext] = None

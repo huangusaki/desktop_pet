@@ -70,13 +70,6 @@ class PetResponseSchema(BaseModel):
     steps: Optional[List[AgentStepSchema]] = Field(
         None, description="List of agent actions to perform in sequence"
     )
-    tool_to_call: Optional[str] = Field(
-        None,
-        description="DEPRECATED: Use 'steps' list instead. Tool to be called by the agent",
-    )
-    tool_arguments: Optional[Dict[str, Any]] = Field(
-        None, description="DEPRECATED: Use 'steps' list instead. Arguments for the tool"
-    )
 
 
 class GeminiClient:
